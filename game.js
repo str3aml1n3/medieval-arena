@@ -113,38 +113,122 @@ coldFill.position.set(-35, 20, -40);
 scene.add(coldFill);
 
 // ============================================================ arena
-const sandTex = canvasTex(512, (g, s) => {
-  g.fillStyle = '#8c6c48'; g.fillRect(0, 0, s, s);
-  for (let i = 0; i < 60; i++) {
-    const x = Math.random() * s, y = Math.random() * s, r = rand(20, 90);
-    const gr = g.createRadialGradient(x, y, 0, x, y, r);
-    const dark = Math.random() < 0.5;
-    gr.addColorStop(0, dark ? 'rgba(60,40,22,.22)' : 'rgba(180,150,110,.18)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+// ---- terrain: one height function shared by rendering and gameplay (feet, blood, pebbles follow it)
+function groundH(x, z) {
+  const r = Math.hypot(x, z);
+  const h = 0.045 * Math.sin(x * 0.83 + 1.3) * Math.cos(z * 0.71 - 0.4)
+        + 0.03 * Math.sin(x * 2.17 - z * 1.63 + 2.1)
+        + 0.015 * Math.sin(x * 4.7 + z * 3.9) * Math.cos(x * 3.1 - z * 5.3);
+  if (r < 19.5) return h + Math.max(0, r - 15.5) ** 2 * 0.03; // sand banked up against the stockade
+  const far = clamp((r - 58) / 40, 0, 1); // the town stays gentle, hills roll beyond the city wall
+  return h * 3 + 0.22 * Math.sin(x * 0.11 + z * 0.07) * Math.cos(z * 0.09 - x * 0.05)
+    + far * (2.0 * Math.sin(x * 0.031 + 0.7) * Math.cos(z * 0.027 - 1.1) + 1.3 * Math.sin(x * 0.067 - z * 0.052) + 2.2);
+}
+// generated albedo + normal map pair from one tileable height field
+function groundMaps(size, o) {
+  const hc = document.createElement('canvas'); hc.width = hc.height = size;
+  const g = hc.getContext('2d');
+  g.fillStyle = '#808080'; g.fillRect(0, 0, size, size);
+  const k = size / 512;
+  const wrap = fn => { for (const ox of [-size, 0, size]) for (const oy of [-size, 0, size]) fn(ox, oy); };
+  for (let i = 0; i < o.blobs; i++) {
+    const x = rand(0, size), y = rand(0, size), r = rand(o.blobR[0], o.blobR[1]) * k, v = Math.random() < 0.5 ? 255 : 0, a = rand(0.08, 0.22);
+    wrap((ox, oy) => {
+      const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
+      gr.addColorStop(0, `rgba(${v},${v},${v},${a})`); gr.addColorStop(1, `rgba(${v},${v},${v},0)`);
+      g.fillStyle = gr; g.fillRect(x + ox - r, y + oy - r, r * 2, r * 2);
+    });
   }
-  for (let i = 0; i < 14000; i++) {
-    const v = Math.random();
-    g.fillStyle = v < 0.5 ? `rgba(50,32,18,${rand(.1, .4)})` : `rgba(200,170,130,${rand(.1, .35)})`;
-    g.fillRect(Math.random() * s, Math.random() * s, rand(1, 2.5), rand(1, 2.5));
+  for (let i = 0; i < (o.ripples || 0); i++) { // shallow ripples in the sand
+    const y0 = rand(0, size), ph = rand(0, 6);
+    g.strokeStyle = `rgba(255,255,255,${rand(0.04, 0.1)})`; g.lineWidth = rand(2, 5) * k;
+    g.beginPath(); for (let x = 0; x <= size; x += 8) g.lineTo(x, y0 + Math.sin((x / size) * Math.PI * 2 * 3 + ph) * 14 * k); g.stroke();
   }
-}, 36);
-const arenaFloor = mesh(new THREE.CircleGeometry(19.4, 72), std(0xffffff, 1), scene, [0, 0.004, 0], [-Math.PI / 2, 0, 0]);
-arenaFloor.material.map = sandTex; arenaFloor.castShadow = false;
-const grassTex = canvasTex(512, (g, s) => {
-  g.fillStyle = '#5d6e38'; g.fillRect(0, 0, s, s);
-  for (let i = 0; i < 70; i++) {
-    const x = Math.random() * s, y = Math.random() * s, r = rand(20, 80);
-    const gr = g.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, Math.random() < 0.4 ? 'rgba(120,98,62,.45)' : 'rgba(110,140,60,.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  for (let i = 0; i < o.stones; i++) {
+    const x = rand(0, size), y = rand(0, size), rx = rand(1.5, 5) * k, ry = rx * rand(0.5, 1), rot = rand(0, 3), a = rand(0.5, 0.8);
+    wrap((ox, oy) => {
+      g.fillStyle = 'rgba(0,0,0,.35)'; g.beginPath(); g.ellipse(x + ox + 1, y + oy + 1, rx * 1.25, ry * 1.25, rot, 0, 7); g.fill();
+      g.fillStyle = `rgba(255,255,255,${a})`; g.beginPath(); g.ellipse(x + ox, y + oy, rx, ry, rot, 0, 7); g.fill();
+    });
   }
-  for (let i = 0; i < 16000; i++) {
-    g.fillStyle = Math.random() < 0.5 ? `rgba(40,60,20,${rand(.2, .5)})` : `rgba(150,170,90,${rand(.15, .4)})`;
-    g.fillRect(Math.random() * s, Math.random() * s, 1, rand(1, 4));
+  const grains = o.grains * (size * size) / 262144;
+  for (let i = 0; i < grains; i++) {
+    const v = Math.random() < 0.5 ? 255 : 0;
+    g.fillStyle = `rgba(${v},${v},${v},${rand(0.1, 0.35)})`;
+    if (o.blades) g.fillRect(rand(0, size), rand(0, size), 1, rand(2, 6) * k); else g.fillRect(rand(0, size), rand(0, size), rand(1, 2), rand(1, 2));
   }
-}, 70);
-const ground = mesh(new THREE.CircleGeometry(260, 72), std(0xffffff, 1), scene, [0, 0, 0], [-Math.PI / 2, 0, 0]);
-ground.material.map = grassTex; ground.castShadow = false;
+  const H = g.getImageData(0, 0, size, size).data;
+  const cc = document.createElement('canvas'), nc = document.createElement('canvas');
+  cc.width = cc.height = nc.width = nc.height = size;
+  const cimg = cc.getContext('2d').createImageData(size, size), nimg = nc.getContext('2d').createImageData(size, size);
+  const h = (x, y) => H[((((y % size) + size) % size) * size + (((x % size) + size) % size)) * 4] / 255;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const i = (y * size + x) * 4, t = clamp((h(x, y) - 0.5) * o.contrast + 0.5, 0, 1), n = Math.random() * 0.06 - 0.03;
+    for (let c = 0; c < 3; c++) cimg.data[i + c] = clamp(lerp(o.dark[c], o.light[c], t) * (1 + n), 0, 255);
+    cimg.data[i + 3] = 255;
+    let nx = -(h(x + 1, y) - h(x - 1, y)) * o.strength, ny = (h(x, y + 1) - h(x, y - 1)) * o.strength, nz = 1;
+    const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+    nimg.data[i] = (nx * 0.5 + 0.5) * 255; nimg.data[i + 1] = (ny * 0.5 + 0.5) * 255; nimg.data[i + 2] = (nz * 0.5 + 0.5) * 255; nimg.data[i + 3] = 255;
+  }
+  cc.getContext('2d').putImageData(cimg, 0, 0); nc.getContext('2d').putImageData(nimg, 0, 0);
+  const mk = (c, srgb) => {
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(o.repeat, o.repeat); t.anisotropy = 8;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t;
+  };
+  return { map: mk(cc, true), normalMap: mk(nc, false) };
+}
+// displace a flat ring onto the terrain and bake large-scale colour variation into vertex colours
+function terrainMesh(geo, maps, tint) {
+  geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position, col = new Float32Array(p.count * 3);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), z = p.getZ(i);
+    p.setY(i, groundH(x, z));
+    const c = tint(x, z);
+    col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true, roughness: 0.95 }));
+  m.receiveShadow = true; scene.add(m); return m;
+}
+const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(z * 0.23 * s - 0.6) * 0.6 + Math.sin((x - z) * 0.61 * s) * 0.25 + Math.sin(x * 1.37 * s + z * 0.97 * s) * 0.15);
+const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 140, grains: 9000, strength: 3.2, contrast: 1.5, dark: [92, 70, 46], light: [178, 148, 108], repeat: 7 });
+terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
+  const m = macro(x, z, 1), r = Math.hypot(x, z), trodden = Math.exp(-r * r / 60) * 0.12;
+  const v = 0.78 + m * 0.3 - trodden + (r > 16 ? 0.06 : 0);
+  return [v * 1.02, v, v * 0.95];
+});
+const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [46, 62, 26], light: [118, 140, 70], repeat: 70 });
+terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
+  const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
+  const worn = Math.exp(-((r - 22) ** 2) / 8) * 0.5 + (Math.abs(x) < 4 && z < -18 ? 0.5 : 0); // trampled ring + road edge
+  const dry = clamp(d * 0.6 + worn, 0, 1), b = 0.85 + m * 0.3;
+  return [lerp(0.8, 1.25, dry) * b, lerp(1, 0.92, dry) * b, 0.83 * b];
+});
+// loose pebbles on the sand
+{
+  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75), n);
+  const d = new THREE.Object3D(), c = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.8, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.03, 0.085);
+    d.position.set(x, groundH(x, z) + s * 0.1, z); d.rotation.set(rand(0, 3), rand(0, 3), rand(0, 3)); d.scale.set(s, s * rand(0.4, 0.7), s * rand(0.7, 1.1));
+    d.updateMatrix(); peb.setMatrixAt(i, d.matrix);
+    const v = rand(0.28, 0.5); peb.setColorAt(i, c.setRGB(v * 0.95, v * 0.85, v * 0.7));
+  }
+  peb.castShadow = peb.receiveShadow = true; scene.add(peb);
+}
+// grass tufts around the outside of the stockade
+{
+  const n = 900, tuft = new THREE.InstancedMesh(new THREE.ConeGeometry(0.12, 0.45, 4), std(0xffffff, 0.9), n);
+  const d = new THREE.Object3D(), c = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, 6.28), r = rand(19.6, 60), x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.6, 1.6);
+    d.position.set(x, groundH(x, z) + 0.18 * s, z); d.rotation.set(rand(-0.2, 0.2), rand(0, 3), rand(-0.2, 0.2)); d.scale.setScalar(s);
+    d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.2, 0.27), rand(0.35, 0.55), rand(0.22, 0.36)));
+  }
+  tuft.receiveShadow = true; scene.add(tuft);
+}
 
 const woodTex = canvasTex(256, (g, s) => {
   g.fillStyle = '#5c4029'; g.fillRect(0, 0, s, s);
@@ -292,7 +376,7 @@ function buildTown() {
   }
   const crenels = (parent, len, y, z, step = 2.2) => { for (let x = -len / 2 + 0.6; x < len / 2; x += step) mesh(box(1.1, 1.3, 0.9), stoneM, parent, [x, y + 0.65, z]); };
   function roundTower(parent, x, z, r, h, roofH, base = 0) {
-    mesh(new THREE.CylinderGeometry(r, r * 1.08, h, 20), stoneM, parent, [x, base + h / 2, z]);
+    mesh(new THREE.CylinderGeometry(r, r * 1.08, h + 2, 20), stoneM, parent, [x, base + h / 2 - 1, z]);
     mesh(new THREE.CylinderGeometry(r * 1.15, r, 1, 20), stoneM, parent, [x, base + h + 0.5, z]);
     for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; mesh(box(0.9, 1.2, 0.7), stoneM, parent, [x + Math.sin(a) * r * 1.08, base + h + 1.6, z + Math.cos(a) * r * 1.08], [0, a, 0]); }
     mesh(cone(r * 1.25, roofH, 20), slateM, parent, [x, base + h + 1 + roofH / 2, z]);
@@ -306,7 +390,7 @@ function buildTown() {
   function house(x, z, rot) {
     const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = rot; tmp.add(g);
     const w = rand(5, 7.5), d = rand(5, 6.5), storeys = Math.random() < 0.5 ? 2 : 3, gh = 3.2;
-    mesh(box(w, gh, d), stoneM, g, [0, gh / 2, 0]);
+    mesh(box(w, gh + 0.8, d), stoneM, g, [0, (gh - 0.8) / 2, 0]); // plinth sinks into uneven ground
     mesh(box(1.2, 2.2, 0.12), doorM, g, [rand(-w / 4, w / 4), 1.1, d / 2 + 0.05]);
     for (const sx of [-1, 1]) mesh(box(0.7, 0.9, 0.08), glassM, g, [sx * w * 0.33, 1.9, d / 2 + 0.04]);
     let y = gh, jet = 0, fw = w, fd = d;
@@ -352,7 +436,7 @@ function buildTown() {
       if (Math.abs(angWrap(m - Math.PI)) < 0.15) continue; // the castle road passes here
       const len = 2 * R * Math.sin(Math.PI / N) - 6;
       const g = new THREE.Group(); g.position.set(Math.sin(m) * R * Math.cos(Math.PI / N), 0, Math.cos(m) * R * Math.cos(Math.PI / N)); g.rotation.y = m + Math.PI / 2; tmp.add(g);
-      mesh(box(len, 9, 2.4), stoneM, g, [0, 4.5, 0]);
+      mesh(box(len, 11, 2.4), stoneM, g, [0, 3.5, 0]);
       crenels(g, len, 9, 0.9);
     }
   }
@@ -381,8 +465,10 @@ function buildTown() {
     for (let i = 0; i < 4; i++) for (const s of [-1, 1]) mesh(box(0.6, 2.2, 0.1), glassM, g, [s * (2 + i * 1.6), base + 14 + (i % 2) * 7, 2.56]);
     banner(g, 0, base + 30, -5, 0); banner(g, -W / 2, base + 30, -D / 2, 0.4); banner(g, W / 2, base + 30, -D / 2, -0.4);
     // dirt road from the arena gate to the castle
-    const road = mesh(new THREE.PlaneGeometry(6, 80), std(0x7c6448, 1), scene, [0, 0.02, -58], [-Math.PI / 2, 0, 0]);
-    road.castShadow = false;
+    const rg = new THREE.PlaneGeometry(6, 80, 6, 120); rg.rotateX(-Math.PI / 2); rg.translate(0, 0, -58);
+    const rp = rg.attributes.position; for (let i = 0; i < rp.count; i++) rp.setY(i, groundH(rp.getX(i), rp.getZ(i)) + 0.05);
+    rg.computeVertexNormals();
+    const road = new THREE.Mesh(rg, std(0x7c6448, 1)); road.receiveShadow = true; scene.add(road);
   }
   // forest and mountains beyond the walls
   for (let i = 0; i < 140; i++) {
@@ -390,8 +476,9 @@ function buildTown() {
     const x = Math.sin(a) * r, z = Math.cos(a) * r;
     if (Math.hypot(x, z + 112) < 62) continue;
     const s = rand(0.8, 1.5);
-    mesh(new THREE.CylinderGeometry(0.3 * s, 0.4 * s, 3 * s, 6), trunkM, tmp, [x, 1.5 * s, z]);
-    for (let k = 0; k < 3; k++) mesh(cone((3 - k * 0.7) * s, 4 * s, 8), pineM, tmp, [x, (3 + k * 2.4) * s, z]);
+    const gy = groundH(x, z) - 0.3;
+    mesh(new THREE.CylinderGeometry(0.3 * s, 0.4 * s, 3 * s, 6), trunkM, tmp, [x, gy + 1.5 * s, z]);
+    for (let k = 0; k < 3; k++) mesh(cone((3 - k * 0.7) * s, 4 * s, 8), pineM, tmp, [x, gy + (3 + k * 2.4) * s, z]);
   }
   for (let i = 0; i < 22; i++) {
     const a = (i / 22) * Math.PI * 2 + rand(-0.1, 0.1), r = rand(185, 215), h = rand(45, 90), rad = rand(40, 65);
@@ -429,7 +516,6 @@ function bakeStatic(group) {
     scene.add(m);
   }
 }
-buildTown();
 
 // spectators on the stands — instanced, they jump when blood is drawn
 let crowdExcite = 0;
@@ -487,7 +573,7 @@ const banners = [];
   const boneMat = std(0xd8ccb0, 0.7);
   for (let i = 0; i < 18; i++) {
     const a = rand(0, 6.28), r = rand(4, 16);
-    mesh(new THREE.CylinderGeometry(0.04, 0.05, rand(0.4, 0.9), 6), boneMat, scene, [Math.sin(a) * r, 0.04, Math.cos(a) * r], [Math.PI / 2, 0, rand(0, 3)]);
+    mesh(new THREE.CylinderGeometry(0.04, 0.05, rand(0.4, 0.9), 6), boneMat, scene, [Math.sin(a) * r, groundH(Math.sin(a) * r, Math.cos(a) * r) + 0.03, Math.cos(a) * r], [Math.PI / 2, 0, rand(0, 3)]);
   }
   // banners
   const clothMat = std(0x7a1f18, 0.95, 0, { side: THREE.DoubleSide });
@@ -547,8 +633,9 @@ class Particles {
       this.vel[i3 + 1] += this.grav[i] * dt;
       this.vel[i3] *= dr; this.vel[i3 + 1] *= dr; this.vel[i3 + 2] *= dr;
       this.pos[i3] += this.vel[i3] * dt; this.pos[i3 + 1] += this.vel[i3 + 1] * dt; this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
-      if (this.pos[i3 + 1] < 0.03) {
-        this.pos[i3 + 1] = 0.03;
+      const gy = this.pos[i3 + 1] < 0.6 ? groundH(this.pos[i3], this.pos[i3 + 2]) + 0.03 : -1;
+      if (this.pos[i3 + 1] < gy) {
+        this.pos[i3 + 1] = gy;
         if (this.flag[i] === 1) { addDecal(this.pos[i3], this.pos[i3 + 2], rand(0.05, 0.16)); this.flag[i] = 0; this.life[i] = Math.min(this.life[i], 0.15); }
         this.vel[i3 + 1] = 0; this.vel[i3] *= 0.4; this.vel[i3 + 2] *= 0.4;
       }
@@ -571,7 +658,7 @@ for (let i = 0; i < 160; i++) {
 let decalIdx = 0;
 function addDecal(x, z, s) {
   const m = decals[decalIdx]; decalIdx = (decalIdx + 1) % decals.length;
-  m.position.set(x, 0.011 + Math.random() * 0.004, z);
+  m.position.set(x, groundH(x, z) + 0.011 + Math.random() * 0.004, z);
   m.scale.set(s, 1, s * rand(0.6, 1)); m.rotation.y = rand(0, 6.28);
   m.visible = true;
 }
@@ -695,19 +782,31 @@ function initAudio() {
   src.connect(f).connect(g).connect(master); src.start();
   const lfo = AC.createOscillator(); lfo.frequency.value = 0.11;
   const lg = AC.createGain(); lg.gain.value = 170; lfo.connect(lg).connect(f.frequency); lfo.start();
+  master.gain.value = settings.sound;
   Music.init(AC, master);
 }
 
 // ============================================================ orchestral score
-// An original battle theme in D minor, written as MIDI note numbers and played by a small
-// Web Audio "orchestra": string section, horns/trumpets, low-string ostinato, timpani, snare, cymbals.
+// An original battle theme in D minor, written as MIDI note numbers and performed with sampled
+// General MIDI instruments (FluidR3_GM soundfont, CC-BY 3.0, via gleitz/midi-js-soundfonts):
+// string ensemble, pizzicato, harp, nylon-string "lute", French horn, trumpet, recorder,
+// timpani, taiko war drums and toms. Samples stream in the background; the game never waits on them.
 const Music = (() => {
-  let ctx, out, layers = {}, nextT = 0, step = 0, on = true, intensity = -1;
-  const BPM = 104, S16 = 60 / BPM / 4, LOOP = 256;
-  const mtof = n => 440 * Math.pow(2, (n - 69) / 12);
+  const SF = 'https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/';
+  // name: [soundfont file, lowest midi, highest midi] — only notes the score uses get decoded
+  const INST = {
+    strings: ['string_ensemble_1', 36, 84], harp: ['orchestral_harp', 38, 86], lute: ['acoustic_guitar_nylon', 40, 79],
+    pizz: ['pizzicato_strings', 28, 62], drum: ['taiko_drum', 36, 52], timp: ['timpani', 33, 52],
+    horn: ['french_horn', 45, 77], trumpet: ['trumpet', 55, 84], recorder: ['recorder', 60, 96], tom: ['melodic_tom', 45, 60],
+  };
+  const ORDER = ['strings', 'harp', 'drum', 'lute', 'timp', 'pizz', 'horn', 'recorder', 'trumpet', 'tom'];
+  const NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+  const noteName = n => NAMES[n % 12] + (Math.floor(n / 12) - 1);
+  let ctx, out, layers = {}, nextT = 0, step = 0, on = true, vol = 0.8, intensity = -1, ducked = false;
+  const banks = {}; // inst -> Map(midi -> AudioBuffer)
+  const BPM = 100, S16 = 60 / BPM / 4, LOOP = 256;
   const CH = { Dm: [50, 57, 62, 65], Bb: [46, 58, 62, 65], C: [48, 55, 64, 67], Am: [45, 57, 60, 64], Gm: [43, 55, 62, 67], A: [45, 57, 61, 64], F: [41, 57, 60, 65] };
   const PROG = [['Dm', 'Bb', 'C', 'Am', 'Dm', 'Gm', 'A', 'A'], ['F', 'C', 'Dm', 'Bb', 'Gm', 'Dm', 'A', 'A']];
-  // [beat, beats, midi] per bar
   const MEL = [[
     [[0, 1.5, 62], [1.5, 0.5, 65], [2, 2, 69]],
     [[0, 1, 70], [1, 1, 69], [2, 1, 67], [3, 1, 65]],
@@ -728,91 +827,124 @@ const Music = (() => {
     [[0, 2, 76], [2, 2, 69]],
   ]];
   const OST = [0, 0, 12, 0, 0, 7, 12, 0];
+  const HARP = [0, 1, 2, 3, 4, 3, 2, 1]; // index into a 2-octave chord arpeggio
+  const LUTE = [1, 0, 1, 1, 0, 1, 1, 0]; // 8th-note strum rhythm
+  const DRUM = [[0, 1], [3, 0.5], [6, 0.7], [8, 1], [11, 0.5], [12, 0.6], [14, 0.8]]; // [16th, vel]
+
   function impulse() {
-    const len = ctx.sampleRate * 3.2, b = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.8); }
+    const len = ctx.sampleRate * 2.6, b = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
     return b;
+  }
+  async function loadInst(key) {
+    const [file, lo, hi] = INST[key];
+    const txt = await (await fetch(SF + file + '-mp3.js')).text();
+    const want = new Set(); for (let n = lo; n <= hi; n++) want.add(noteName(n));
+    const map = new Map(), jobs = [];
+    const re = /"([A-G]b?-?\d)":\s*"data:audio\/mp3;base64,([^"]+)"/g;
+    let m;
+    while ((m = re.exec(txt))) {
+      if (!want.has(m[1])) continue;
+      const name = m[1], b64 = m[2];
+      const midi = NAMES.indexOf(name.replace(/-?\d+$/, '')) + (parseInt(name.match(/-?\d+$/)[0], 10) + 1) * 12;
+      const bin = atob(b64), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      jobs.push(ctx.decodeAudioData(u8.buffer).then(buf => map.set(midi, buf)).catch(() => {}));
+    }
+    await Promise.all(jobs);
+    banks[key] = map;
+  }
+  async function loadAll(onProgress) {
+    let done = 0;
+    for (const k of ORDER) {
+      try { await loadInst(k); } catch (e) { console.warn('music: could not load', k, e); }
+      onProgress?.(++done / ORDER.length);
+    }
+    console.info(`music: ${Object.values(banks).filter(b => b.size).length}/${ORDER.length} instruments ready`);
   }
   function init(c, dest) {
     if (ctx) return;
-    ctx = c; out = ctx.createGain(); out.gain.value = 0.5; out.connect(dest);
+    ctx = c; out = ctx.createGain(); out.gain.value = vol; out.connect(dest);
     const rev = ctx.createConvolver(); rev.buffer = impulse();
-    const wet = ctx.createGain(); wet.gain.value = 0.5; rev.connect(wet).connect(out);
-    for (const [k, send] of [['strings', 0.7], ['low', 0.3], ['brass', 0.5], ['melody', 0.55], ['perc', 0.4]]) {
+    const wet = ctx.createGain(); wet.gain.value = 0.35; rev.connect(wet).connect(out);
+    for (const [k, send] of [['strings', 0.6], ['harp', 0.5], ['lute', 0.3], ['low', 0.25], ['brass', 0.45], ['calm', 0.5], ['perc', 0.35]]) {
       const g = ctx.createGain(); g.gain.value = 0; g.connect(out);
       const s = ctx.createGain(); s.gain.value = send; g.connect(s).connect(rev);
       layers[k] = g;
     }
     nextT = ctx.currentTime + 0.15;
     setInterval(tick, 40);
+    loadAll();
   }
-  function voice(layer, { type = 'sawtooth', n, t, dur, vel = 0.1, a = 0.05, r = 0.3, cut = 2000, cutEnv = 0, detune = [0], vib = 0, q = 0.7 }) {
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = q;
-    if (cutEnv) { f.frequency.setValueAtTime(cut * 0.3, t); f.frequency.linearRampToValueAtTime(cut, t + cutEnv); } else f.frequency.setValueAtTime(cut, t);
-    const g = ctx.createGain(), hold = Math.max(a, dur);
-    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vel, t + a);
-    g.gain.setValueAtTime(vel, t + hold); g.gain.exponentialRampToValueAtTime(0.0001, t + hold + r);
-    f.connect(g).connect(layers[layer]);
-    let lg = null;
-    if (vib) { const l = ctx.createOscillator(); l.frequency.value = 5.3; lg = ctx.createGain(); lg.gain.value = vib; l.connect(lg); l.start(t); l.stop(t + hold + r + 0.1); }
-    for (const d of detune) {
-      const o = ctx.createOscillator(); o.type = type; o.frequency.value = mtof(n); o.detune.value = d;
-      if (lg) lg.connect(o.detune);
-      o.connect(f); o.start(t); o.stop(t + hold + r + 0.1);
-    }
+  // play a sampled note; picks the nearest decoded sample and repitches it
+  function play(inst, layer, n, t, dur, vel, release = 0.25, attack = 0.005) {
+    const bank = banks[inst]; if (!bank || !bank.size) return;
+    let buf = bank.get(n), sn = n;
+    if (!buf) { let best = 1e9; for (const [k, b] of bank) if (Math.abs(k - n) < best) { best = Math.abs(k - n); buf = b; sn = k; } }
+    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = Math.pow(2, (n - sn) / 12);
+    const g = ctx.createGain(), end = t + Math.min(dur, buf.duration);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vel, t + attack);
+    g.gain.setValueAtTime(vel, end); g.gain.exponentialRampToValueAtTime(0.0001, end + release);
+    src.connect(g).connect(layers[layer]); src.start(t); src.stop(end + release + 0.05);
   }
-  function timpani(n, t, vel) {
-    const o = ctx.createOscillator(); o.type = 'sine';
-    o.frequency.setValueAtTime(mtof(n) * 1.06, t); o.frequency.exponentialRampToValueAtTime(mtof(n), t + 0.08);
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vel, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
-    o.connect(g).connect(layers.perc); o.start(t); o.stop(t + 1.4);
-    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
-    const ng = ctx.createGain(); ng.gain.setValueAtTime(vel * 0.5, t); ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
-    s.connect(f).connect(ng).connect(layers.perc); s.start(t, Math.random()); s.stop(t + 0.2);
-  }
-  function hitNoise(t, { type, f0, q = 0.8, vel, dur }) {
-    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = f0; f.Q.value = q;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vel, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    s.connect(f).connect(g).connect(layers.perc); s.start(t, Math.random()); s.stop(t + dur + 0.05);
-  }
-  const snare = (t, vel) => { hitNoise(t, { type: 'bandpass', f0: 1900, vel, dur: 0.14 }); voice('perc', { type: 'triangle', n: 54, t, dur: 0.02, vel: vel * 0.5, a: 0.003, r: 0.06, cut: 3000 }); };
-  const cymbal = (t, vel) => hitNoise(t, { type: 'highpass', f0: 6500, vel, dur: 2.2 });
   function schedule(s, t) {
     const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
-    const ch = CH[PROG[sec][bi]], bar4 = 16 * S16;
+    const ch = CH[PROG[sec][bi]], barLen = 16 * S16, up = ch.slice(1);
+    // strings: sustained chord + bass
     if (p === 0) {
-      for (const n of ch.slice(1)) voice('strings', { n: n + 12, t, dur: bar4, vel: 0.035, a: 0.35, r: 0.8, cut: 2600, detune: [-9, 0, 9], vib: 9 });
-      for (const n of [ch[0], ch[0] - 12]) voice('strings', { n, t, dur: bar4, vel: 0.045, a: 0.25, r: 0.7, cut: 900, detune: [-6, 6] });
-      if (bi === 0) cymbal(t, 0.12);
-      if (sec === 1 || bi % 4 === 0) for (const n of ch.slice(1)) voice('brass', { n, t, dur: sec ? 8 * S16 : bar4, vel: sec ? 0.045 : 0.03, a: sec ? 0.03 : 0.2, r: 0.4, cut: sec ? 2600 : 1300, cutEnv: 0.12, detune: [-5, 5] });
+      for (const n of up) play('strings', 'strings', n + 12, t, barLen, 0.22, 0.9, 0.25);
+      play('strings', 'strings', ch[0], t, barLen, 0.3, 0.9, 0.2);
     }
-    if (sec === 1 && bi >= 6 && p === 8) for (const n of ch.slice(1)) voice('brass', { n, t, dur: 6 * S16, vel: 0.05, a: 0.02, r: 0.4, cut: 2800, cutEnv: 0.1, detune: [-5, 5] });
-    if (p % 2 === 0) voice('low', { n: ch[0] + OST[p / 2], t, dur: S16 * 1.1, vel: 0.075, a: 0.006, r: 0.08, cut: 1500, cutEnv: 0.025, detune: [-6, 6] });
+    // harp arpeggio, 16ths, rolling over two octaves
+    {
+      const arp = [ch[0] + 12, ...up.map(n => n + 12), ch[0] + 24];
+      const idx = HARP[(p % 8)] + (p >= 8 ? 1 : 0);
+      if (sec === 0 || p % 2 === 0) play('harp', 'harp', arp[Math.min(arp.length - 1, idx)], t, 1.2, 0.5, 0.6);
+    }
+    // lute: strummed chords, 8ths
+    if (p % 2 === 0 && LUTE[p / 2]) {
+      const strum = sec === 1 ? 1 : 0.6;
+      [ch[0] + 12, ...up].forEach((n, i) => play('lute', 'lute', n, t + i * 0.018, S16 * 2.2, 0.32 * strum * (p % 8 === 0 ? 1.2 : 1), 0.15));
+    }
+    // pizzicato ostinato
+    if (p % 2 === 0) play('pizz', 'low', ch[0] - 12 + OST[p / 2], t, S16 * 2, 0.55, 0.1);
+    // melody: horn in A, trumpet + horn in B; recorder carries it when things are calm
     for (const [beat, len, n] of MEL[sec][bi]) {
       if (beat * 4 !== p) continue;
-      voice('melody', { n, t, dur: len * 4 * S16 * 0.94, vel: 0.075, a: 0.06, r: 0.3, cut: sec ? 2900 : 1800, cutEnv: 0.09, detune: [-7, 0, 7], vib: 14 });
-      voice('melody', { type: 'triangle', n: n - 12, t, dur: len * 4 * S16 * 0.94, vel: 0.05, a: 0.08, r: 0.3, cut: 1200 });
+      const d = len * 4 * S16 * 0.95;
+      if (sec === 0) play('horn', 'brass', n, t, d, 0.5, 0.35, 0.04);
+      else { play('trumpet', 'brass', n, t, d, 0.38, 0.3, 0.02); play('horn', 'brass', n - 12, t, d, 0.4, 0.35, 0.04); }
+      play('recorder', 'calm', n + 12, t, d, 0.3, 0.25, 0.03);
     }
+    if (sec === 1 && p === 0) for (const n of up) play('horn', 'brass', n, t, barLen * 0.9, 0.18, 0.4, 0.15);
+    // war drums
+    for (const [q, v] of DRUM) if (q === p) play('drum', 'perc', 38, t, 1.5, 0.75 * v, 0.4);
+    if (sec === 1 && (p === 4 || p === 12)) play('tom', 'perc', 52, t, 0.6, 0.45, 0.2);
+    if (bi === 7 && p >= 8) play('tom', 'perc', 50 + (p - 8), t, 0.4, 0.2 + (p - 8) * 0.05, 0.2);
+    // timpani
     let tn = ch[0]; while (tn > 45) tn -= 12; while (tn < 36) tn += 12;
-    if (bi === 7) timpani(45, t, 0.15 + (p / 16) * 0.35);
-    else if (p === 0 || p === 8 || (p === 14 && bi % 2 === 1)) timpani(p === 8 ? tn + 7 > 45 ? tn - 5 : tn + 7 : tn, t, p === 14 ? 0.25 : 0.45);
-    if (sec === 1 && (p === 4 || p === 12)) snare(t, 0.22);
-    if (sec === 1 && p === 14) snare(t, 0.08);
-    if (bi === 7 && p >= 8) snare(t, 0.06 + (p - 8) * 0.03);
+    if (bi === 7) play('timp', 'perc', 45, t, 0.8, 0.25 + (p / 16) * 0.5, 0.3);
+    else if (p === 0) play('timp', 'perc', tn, t, 2, 0.7, 0.6);
   }
   function tick() {
-    if (!ctx) return;
-    if (nextT < ctx.currentTime - 1) nextT = ctx.currentTime + 0.05; // tab was in the background
+    if (!ctx || ctx.state !== 'running') return;
+    if (nextT < ctx.currentTime - 1) nextT = ctx.currentTime + 0.05;
     while (nextT < ctx.currentTime + 0.25) { schedule(step, nextT); nextT += S16; step = (step + 1) % LOOP; }
   }
   function setIntensity(x) {
     if (!ctx || Math.abs(x - intensity) < 0.01) return;
     intensity = x;
-    const now = ctx.currentTime, lv = { strings: 1, low: x, brass: 0.35 + 0.65 * x, melody: 0.45 + 0.55 * x, perc: x * x };
-    for (const k in lv) layers[k].gain.setTargetAtTime(lv[k], now, 1.2);
+    const lv = { strings: 0.9, harp: 0.9 - 0.45 * x, lute: 0.35 + 0.5 * x, low: x, brass: 0.15 + 0.85 * x, calm: Math.max(0, 0.8 - x), perc: x };
+    for (const k in lv) layers[k].gain.setTargetAtTime(lv[k], ctx.currentTime, 1.2);
   }
-  function toggle() { if (!ctx) return; on = !on; out.gain.setTargetAtTime(on ? 0.5 : 0, ctx.currentTime, 0.2); return on; }
-  return { init, setIntensity, toggle };
+  const apply = () => ctx && out.gain.setTargetAtTime(on ? vol * (ducked ? 0.4 : 1) : 0, ctx.currentTime, 0.15);
+  return {
+    init, setIntensity,
+    toggle() { on = !on; apply(); return on; },
+    setVolume(v) { vol = v; apply(); },
+    duck(d) { ducked = d; apply(); },
+    get volume() { return vol; }, get enabled() { return on; },
+  };
 })();
 function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.4, attack = 0.004, delay = 0 }) {
   if (!AC) return;
@@ -1283,9 +1415,9 @@ class Beast {
     set(R.jaw, T.jaw, 0, 0); set(R.tail, T.tx, T.ty, 0);
     set(R.lHip, T.lh, 0, 0); set(R.lKn, T.lk, 0, 0); set(R.lAn, T.la, 0, 0);
     set(R.rHip, T.rh, 0, 0); set(R.rKn, T.rk, 0, 0); set(R.rAn, T.ra, 0, 0);
-    R.root.position.copy(this.pos);
+    R.root.position.copy(this.pos); R.root.position.y = groundH(this.pos.x, this.pos.z);
     R.root.rotation.y = this.yaw;
-    if (st === 'dead') { R.root.rotation.z = damp(R.root.rotation.z, this.dieRoll, 4, dt); R.root.position.y = damp(R.root.position.y, 0.55 * this.s, 4, dt); }
+    if (st === 'dead') { R.root.rotation.z = damp(R.root.rotation.z, this.dieRoll, 4, dt); R.root.position.y = groundH(this.pos.x, this.pos.z) + 0.55 * this.s; }
     const f = this.flash > 0 ? this.flash / 0.12 : 0;
     for (const m of R.flashMats) m.emissive.setRGB(0.6 * f, 0.08 * f, 0.04 * f);
     const tele = st === 'lungeWind' || st === 'peckWind' ? 1 : 0;
@@ -1472,7 +1604,7 @@ function updatePlayer(dt) {
     case 'dead': {
       P.t += dt; tp = POSE.dead; k = 6; velK = 3;
       hero.root.rotation.x = damp(hero.root.rotation.x, -1.45, 5, dt);
-      hero.root.position.y = damp(hero.root.position.y, 0.12, 5, dt);
+      hero.root.position.y = damp(hero.root.position.y, groundH(P.pos.x, P.pos.z) + 0.12, 5, dt);
       break;
     }
   }
@@ -1506,7 +1638,7 @@ function updatePlayer(dt) {
   const l = Math.hypot(P.pos.x, P.pos.z);
   if (l > ARENA_R) { P.pos.x *= ARENA_R / l; P.pos.z *= ARENA_R / l; }
   hero.root.position.x = P.pos.x; hero.root.position.z = P.pos.z;
-  if (P.state !== 'dead') { hero.root.position.y = 0; hero.root.rotation.x = 0; }
+  if (P.state !== 'dead') { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; }
   hero.root.rotation.y = P.yaw;
   hero.root.updateMatrixWorld(true);
   if (P.state === 'attack') {
@@ -1587,21 +1719,60 @@ function begin() {
 }
 $('startBtn').onclick = begin;
 
+// ============================================================ pause menu
+const settings = { sens: 1, sound: 0.6 };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('arena-settings') || '{}')); } catch (e) { /* storage unavailable */ }
+const saveSettings = () => { try { localStorage.setItem('arena-settings', JSON.stringify({ ...settings, music: Music.volume, lockOn })); } catch (e) { /* ignore */ } };
+try { const st = JSON.parse(localStorage.getItem('arena-settings') || '{}'); if (typeof st.lockOn === 'boolean') lockOn = st.lockOn; if (typeof st.music === 'number') Music.setVolume(st.music); } catch (e) { /* ignore */ }
+let paused = false, resumeGuard = 0;
+const canPause = () => (game.state === 'play' || game.state === 'between') && $('overlay').classList.contains('hidden');
+function pauseGame() {
+  if (paused || !canPause()) return;
+  paused = true;
+  for (const k in keys) keys[k] = false; mouseR = false;
+  $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
+  $('pause').classList.remove('hidden');
+  if (document.pointerLockElement) document.exitPointerLock();
+  Music.duck(true);
+}
+function resumeGame() {
+  if (!paused) return;
+  paused = false; resumeGuard = performance.now();
+  $('pause').classList.add('hidden');
+  Music.duck(false);
+  last = performance.now();
+  renderer.domElement.requestPointerLock?.()?.catch?.(() => {});
+}
+$('resumeBtn').onclick = resumeGame;
+$('restartBtn').onclick = () => { resumeGame(); resetGame(); };
+$('optMusic').oninput = e => { Music.setVolume(+e.target.value); saveSettings(); };
+$('optSound').oninput = e => { settings.sound = +e.target.value; if (master) master.gain.value = settings.sound; saveSettings(); };
+$('optSens').oninput = e => { settings.sens = +e.target.value; saveSettings(); };
+$('optLock').onchange = e => { lockOn = e.target.checked; saveSettings(); };
+// losing pointer lock (the browser eats the first Esc press) or the window losing focus pauses the game
+document.addEventListener('pointerlockchange', () => {
+  if (!document.pointerLockElement && performance.now() - resumeGuard > 300) pauseGame();
+});
+addEventListener('blur', () => pauseGame());
+document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+
 // ============================================================ input
 const keys = {}; const pressed = new Set(); let mouseR = false;
 addEventListener('keydown', e => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
   if (!keys[e.code]) pressed.add(e.code);
   keys[e.code] = true;
+  if (e.code === 'Escape') { if (paused) resumeGame(); else pauseGame(); return; }
+  if (paused) return;
   if (e.code === 'Tab') lockOn = !lockOn;
   if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none';
-  if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : 0.6;
+  if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : settings.sound;
   if (e.code === 'KeyN') Music.toggle();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; });
 renderer.domElement.addEventListener('mousedown', e => {
-  if (game.state === 'title') return;
+  if (game.state === 'title' || paused) return;
   if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock?.();
   if (e.button === 0) pressed.add('Attack');
   if (e.button === 2) mouseR = true;
@@ -1612,8 +1783,8 @@ addEventListener('contextmenu', e => e.preventDefault());
 let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8;
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  if (!currentTarget() && P.state !== 'dead' && P.state !== 'attack') P.yaw -= e.movementX * 0.0024;
-  camPitch = clamp(camPitch + e.movementY * 0.0018, 0.02, 0.85);
+  if (!currentTarget() && P.state !== 'dead' && P.state !== 'attack') P.yaw -= e.movementX * 0.0024 * settings.sens;
+  camPitch = clamp(camPitch + e.movementY * 0.0018 * settings.sens, 0.02, 0.85);
 });
 addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) * 0.4, 2.8, 9); }, { passive: true });
 
@@ -1696,6 +1867,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   let dt = rdt;
+  if (paused) { renderer.render(scene, camera); pressed.clear(); return; }
   if (hitStop > 0) { hitStop -= rdt; dt *= 0.06; }
   else if (slowMo > 0) { slowMo -= rdt; dt *= 0.35; }
   time += dt;
@@ -1728,4 +1900,38 @@ function loop(now) {
   pressed.clear();
 }
 SFX.crackle = () => nz({ dur: 0.03, type: 'highpass', f0: 2200, f1: 3200, gain: rand(0.01, 0.04) });
-requestAnimationFrame(loop);
+// ============================================================ loading: build + warm up every shader before play
+// Physical materials (clearcoat/sheen) are slow to compile on Windows/ANGLE; doing it here instead of
+// on the first frame a beast appears avoids a multi-second freeze when entering the arena.
+async function preload() {
+  const step = async (label, pct, fn) => {
+    $('loadStep').textContent = label; $('loadFill').style.width = pct + '%';
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+    await fn();
+  };
+  let warm;
+  await step('RAISING THE TOWN…', 15, () => buildTown());
+  await step('SUMMONING THE BEAST…', 35, () => {
+    warm = new Beast(1, 0, 0); warm.pos.set(0, 0, 0); warm.rig.root.position.set(0, 0, 0);
+    setSwordInHand(true);
+    popText(new V3(0, -50, 0), '', '');
+  });
+  await step('TEMPERING STEEL…', 55, async () => {
+    camera.position.set(0, 4, 10); camera.lookAt(0, 1.5, 0);
+    if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera);
+  });
+  await step('LIGHTING THE TORCHES…', 80, () => {
+    trail.push(new V3(0, 1, 0), new V3(0, 2, 0)); trail.update(0);
+    renderer.render(scene, camera);
+  });
+  await step('TUNING THE ORCHESTRA…', 95, () => {
+    try { initAudio(); } catch (e) { console.warn(e); }
+  });
+  warm.dispose(); trail.samples.length = 0; setSwordInHand(false);
+  $('loadFill').style.width = '100%';
+  $('loading').classList.add('hidden');
+  $('overlay').classList.remove('hidden');
+  last = performance.now();
+  requestAnimationFrame(loop);
+}
+preload();
