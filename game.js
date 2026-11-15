@@ -1256,6 +1256,42 @@ function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 
   g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   node.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05);
 }
+// A synthesized human voice: a rough glottal buzz (sawtooth + noise, with jitter) through parallel vowel formants.
+// pitch/amp are arrays sampled evenly over dur; vowels morph between formant sets over the same span.
+const VOWELS = { a: [800, 1200, 2700], ae: [700, 1700, 2600], o: [520, 900, 2500], u: [350, 750, 2400], e: [450, 1900, 2600], uh: [600, 1100, 2500] };
+function voice({ dur, pitch, amp, vowels = ['a'], gain = 0.5, rough = 0.3, breath = 0.15, delay = 0 }) {
+  if (!AC) return;
+  const t = AC.currentTime + delay, n = 64;
+  const curve = (arr, f = v => v) => Float32Array.from({ length: n }, (_, i) => {
+    const x = (i / (n - 1)) * (arr.length - 1), j = Math.min(arr.length - 2, Math.floor(x)), u = x - j;
+    return f(lerp(arr[j], arr[j + 1] ?? arr[j], u), i);
+  });
+  // pitch with vocal jitter and a strained wobble
+  const src = AC.createOscillator(); src.type = 'sawtooth';
+  src.frequency.setValueCurveAtTime(curve(pitch, (v, i) => v * (1 + Math.sin(i * 1.7) * 0.012 + (Math.random() - 0.5) * rough * 0.08)), t, dur);
+  const sub = AC.createOscillator(); sub.type = 'square'; // octave-down growl gives the scream its rasp
+  sub.frequency.setValueCurveAtTime(curve(pitch, v => v * 0.5), t, dur);
+  const subG = AC.createGain(); subG.gain.value = rough * 0.35;
+  const shaper = AC.createWaveShaper(); const k = 1 + rough * 12;
+  shaper.curve = Float32Array.from({ length: 512 }, (_, i) => { const x = i / 255.5 - 1; return Math.tanh(k * x) / Math.tanh(k); });
+  const glottis = AC.createGain(); glottis.gain.value = 0.5;
+  src.connect(glottis); sub.connect(subG).connect(glottis);
+  const nsrc = AC.createBufferSource(); nsrc.buffer = noiseBuf; const nG = AC.createGain(); nG.gain.value = breath;
+  nsrc.connect(nG).connect(glottis);
+  glottis.connect(shaper);
+  const env = AC.createGain(); env.gain.value = 0;
+  env.gain.setValueCurveAtTime(curve(amp, v => v * gain), t, dur);
+  const vs = vowels.map(v => VOWELS[v]);
+  [1, 0.55, 0.3].forEach((fg, fi) => {
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 5 + fi * 2;
+    bp.frequency.setValueCurveAtTime(curve(vs.map(f => f[fi])), t, dur);
+    const g = AC.createGain(); g.gain.value = fg * 3.6;
+    shaper.connect(bp).connect(g).connect(env);
+  });
+  env.connect(master);
+  for (const o of [src, sub]) { o.start(t); o.stop(t + dur + 0.05); }
+  nsrc.start(t, Math.random()); nsrc.stop(t + dur + 0.05);
+}
 const SFX = {
   swing(step) { nz({ dur: 0.2 + step * 0.03, f0: 450, f1: 2600 + step * 300, q: 1.3, gain: 0.3 + step * 0.04 }); nz({ dur: 0.15, type: 'highpass', f0: 3500, f1: 6500, gain: 0.05 }); },
   hit(heavy) {
@@ -1278,7 +1314,22 @@ const SFX = {
     nz({ dur: 0.15, f0: 1800, f1: 1100, q: 2, gain: 0.1 });
   },
   snap() { nz({ dur: 0.07, f0: 3200, f1: 1500, q: 3, gain: 0.25 }); tn({ dur: 0.05, f0: 900, f1: 500, gain: 0.1 }); },
-  hurt() { tn({ dur: 0.24, type: 'sawtooth', f0: 200, f1: 115, gain: 0.25, lp: 650 }); nz({ dur: 0.16, type: 'lowpass', f0: 900, f1: 260, gain: 0.32 }); },
+  hurt(heavy) {
+    nz({ dur: 0.16, type: 'lowpass', f0: 900, f1: 260, gain: 0.32 });
+    const p = rand(0.92, 1.1);
+    if (heavy) voice({ dur: 0.75, pitch: [230 * p, 330 * p, 300 * p, 210 * p, 160 * p], amp: [0, 1, 0.9, 0.6, 0], vowels: ['ae', 'a', 'a', 'uh'], gain: 0.55, rough: 0.55, breath: 0.25, delay: 0.02 });
+    else [
+      () => voice({ dur: 0.32, pitch: [150 * p, 175 * p, 120 * p], amp: [0, 1, 0], vowels: ['uh', 'u'], gain: 0.5, rough: 0.35, breath: 0.3, delay: 0.02 }),   // "uhh"
+      () => voice({ dur: 0.42, pitch: [190 * p, 240 * p, 150 * p], amp: [0, 1, 0.7, 0], vowels: ['a', 'uh', 'o'], gain: 0.5, rough: 0.45, breath: 0.25, delay: 0.02 }), // "argh"
+      () => voice({ dur: 0.28, pitch: [170 * p, 130 * p], amp: [0, 1, 0], vowels: ['e', 'uh'], gain: 0.45, rough: 0.3, breath: 0.35, delay: 0.02 }),      // "hngh"
+    ][(Math.random() * 3) | 0]();
+  },
+  // death scream: a long, cracking cry that chokes off into a groan
+  scream() {
+    const p = rand(0.95, 1.05);
+    voice({ dur: 1.7, pitch: [300 * p, 470 * p, 520 * p, 500 * p, 440 * p, 330 * p, 240 * p], amp: [0, 1, 1, 0.95, 0.85, 0.5, 0], vowels: ['ae', 'a', 'a', 'a', 'o', 'uh'], gain: 0.45, rough: 0.7, breath: 0.25 });
+    voice({ dur: 1.2, pitch: [140 * p, 120 * p, 95 * p, 80 * p], amp: [0, 0.8, 0.5, 0], vowels: ['uh', 'o', 'u'], gain: 0.4, rough: 0.6, breath: 0.45, delay: 1.55 });
+  },
   step(heavy) {
     nz({ dur: heavy ? 0.13 : 0.06, type: 'lowpass', f0: heavy ? 260 : 480, f1: 90, gain: heavy ? 0.32 : 0.09 });
     if (heavy) tn({ dur: 0.12, f0: 75, f1: 40, gain: 0.22 });
@@ -1465,13 +1516,14 @@ const PALETTES = [
 function beastMaterials(pal, vc) {
   const o = { vertexColors: vc };
   return {
-    plume: phys(pal.plume, 0.5, 0, { ...o, sheen: 1, sheenColor: 0xb8d0ff, sheenRoughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.35 }),
-    rust: phys(pal.rust, 0.55, 0, { ...o, sheen: 0.8, sheenColor: 0xd4e2ff, sheenRoughness: 0.35, clearcoat: 0.2 }),
-    belly: phys(pal.belly, 0.6, 0, { ...o, sheen: 0.6, sheenColor: 0xe0e8ff }),
-    bone: phys(0xe2d6bc, 0.25, 0, { ...o, clearcoat: 1, clearcoatRoughness: 0.08 }),
-    scale: phys(0x5e4a33, 0.35, 0.1, { ...o, clearcoat: 0.85, clearcoatRoughness: 0.18 }),
-    claw: phys(0x1f1710, 0.18, 0.2, { ...o, clearcoat: 1, clearcoatRoughness: 0.04 }),
-    eye: phys(0x221100, 0.1, 0, { clearcoat: 1, clearcoatRoughness: 0, emissive: 0xffa21a, emissiveIntensity: 2.4 }),
+    // matte, dusty feathers: only a faint, warm sheen at grazing angles, no lacquer
+    plume: phys(pal.plume, 0.9, 0, { ...o, sheen: 0.25, sheenColor: 0x6a6258, sheenRoughness: 0.8, envMapIntensity: 0.4 }),
+    rust: phys(pal.rust, 0.9, 0, { ...o, sheen: 0.2, sheenColor: 0x6a5a4a, sheenRoughness: 0.8, envMapIntensity: 0.4 }),
+    belly: std(pal.belly, 0.95, 0, { ...o, envMapIntensity: 0.4 }),
+    bone: std(0xb8ac94, 0.7, 0, { ...o, envMapIntensity: 0.5 }),
+    scale: std(0x4a3a28, 0.75, 0, { ...o, envMapIntensity: 0.5 }),
+    claw: std(0x1a130d, 0.55, 0, { ...o, envMapIntensity: 0.6 }),
+    eye: std(0x221100, 0.4, 0, { emissive: 0xffa21a, emissiveIntensity: 2.4 }),
   };
 }
 // The Blender-built model (tools/build_thornbeak.py → models/thornbeak.glb). Its named joints are
@@ -1807,9 +1859,11 @@ function hitPlayer(e, dmg, heavy) {
   const hp = P.pos.clone().add(new V3(0, 1.35, 0));
   popText(hp, String(dmg), 'player');
   bloodBurst(hp, dir, 14);
-  SFX.hurt(); shake = Math.max(shake, heavy ? 0.6 : 0.35); hitStop = 0.06; vignetteA = 1;
+  shake = Math.max(shake, heavy ? 0.6 : 0.35); hitStop = 0.06; vignetteA = 1;
+  P.pain = Math.min(1.6, (P.pain || 0) + (heavy ? 1.2 : 0.8)); P.painSeed = rand(0, 10);
+  if (P.hp > 0) SFX.hurt(heavy);
   P.combo = 0;
-  if (P.hp <= 0) { P.hp = 0; P.state = 'dead'; P.t = 0; P.vel.copy(dir).multiplyScalar(3); onPlayerDeath(); return true; }
+  if (P.hp <= 0) { P.hp = 0; P.state = 'dead'; P.t = 0; SFX.scream(); P.pain = 2; P.vel.copy(dir).multiplyScalar(3); onPlayerDeath(); return true; }
   P.state = 'hurt'; P.t = 0; P.stunDur = heavy ? 0.75 : 0.36;
   P.vel.copy(dir).multiplyScalar(heavy ? 7.5 : 3);
   trail.samples.length = 0; hero.bladeMat.emissive.setRGB(0, 0, 0);
@@ -1974,6 +2028,26 @@ function updatePlayer(dt) {
   }
   // breathing
   tp = blend(tp, tp, 0); tp.spine[0] += Math.sin(time * 2.1) * 0.015;
+  // pain: after a hit he writhes (twisting, doubling over, clutching the wound) and it fades over a second or so;
+  // when he dies he thrashes on the ground before going still
+  if (P.pain > 0.01) {
+    const dead = P.state === 'dead', busy = P.state === 'attack' || P.state === 'block' || P.state === 'dodge';
+    const pn = Math.min(1, P.pain) * (busy ? 0.3 : 1), w = time * (dead ? 8 : 11) + P.painSeed;
+    tp.spine[0] += (0.2 + Math.sin(w * 0.7) * 0.14) * pn;       // doubles over
+    tp.spine[1] += Math.sin(w) * 0.35 * pn;                      // twists
+    tp.spine[2] += Math.sin(w * 1.3 + 1) * 0.22 * pn;            // bends to the side
+    tp.neck[0] += Math.sin(w * 1.7) * 0.28 * pn; tp.neck[1] += Math.sin(w * 0.9 + 2) * 0.35 * pn;
+    if (!busy) { tp.lSh[0] -= (0.5 + Math.sin(w * 1.1) * 0.25) * pn; tp.lSh[2] -= 0.35 * pn; tp.lEl[0] -= 1.2 * pn; } // clutches the wound
+    tp.lKn[0] += Math.max(0, Math.sin(w * 0.8)) * 0.4 * pn; tp.rKn[0] += Math.max(0, -Math.sin(w * 0.8)) * 0.4 * pn;
+    if (dead) { // kicking and clawing at the sand
+      tp.lHip[0] -= Math.sin(w * 1.2) * 0.7 * pn; tp.rHip[0] += Math.sin(w * 1.2 + 0.8) * 0.7 * pn;
+      tp.lKn[0] += Math.abs(Math.sin(w * 1.2)) * 0.6 * pn; tp.rKn[0] += Math.abs(Math.sin(w * 1.2 + 0.8)) * 0.6 * pn;
+      tp.rSh[0] += Math.sin(w * 0.9) * 0.8 * pn; tp.rEl[0] -= Math.abs(Math.sin(w * 1.4)) * 0.8 * pn;
+      hero.root.rotation.z = Math.sin(w * 0.6) * 0.18 * pn;
+    } else tp.hy -= 0.05 * pn;
+    k = Math.max(k, 14 * pn);
+    P.pain = Math.max(0, P.pain - dt * (dead ? 0.5 : 1.1));
+  } else if (P.state === 'dead') hero.root.rotation.z = damp(hero.root.rotation.z, 0, 3, dt);
   applyHero(tp, k, dt);
 
   if (P.state !== 'block' && P.state !== 'attack' && P.state !== 'dodge' && P.stDelay <= 0) P.st = Math.min(P.maxSt, P.st + 32 * dt);
@@ -1983,7 +2057,7 @@ function updatePlayer(dt) {
   const l = Math.hypot(P.pos.x, P.pos.z);
   if (l > ARENA_R) { P.pos.x *= ARENA_R / l; P.pos.z *= ARENA_R / l; }
   hero.root.position.x = P.pos.x; hero.root.position.z = P.pos.z;
-  if (P.state !== 'dead') { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; }
+  if (P.state !== 'dead') { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
   hero.root.rotation.y = P.yaw;
   hero.root.updateMatrixWorld(true);
   if (P.state === 'attack') {
@@ -2043,7 +2117,7 @@ function onPlayerDeath() {
   }, 2200);
 }
 function resetGame() {
-  Object.assign(P, { hp: P.maxHp, st: P.maxSt, state: 'idle', t: 0, combo: 0, ghostHp: P.maxHp, iframes: 0 });
+  Object.assign(P, { hp: P.maxHp, st: P.maxSt, state: 'idle', t: 0, combo: 0, ghostHp: P.maxHp, iframes: 0, pain: 0 });
   P.pos.set(0, 0, 7); P.vel.set(0, 0, 0); P.yaw = Math.PI;
   hero.root.rotation.x = 0; hero.root.position.y = 0;
   for (const d of decals) d.visible = false;
