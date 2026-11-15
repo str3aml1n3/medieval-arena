@@ -350,7 +350,7 @@ terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
 });
 // loose pebbles on the sand
 {
-  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75), n);
+  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), phys(0xffffff, 0.55, 0, { specularColor: 0xbcd2ff }), n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.8, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.03, 0.085);
@@ -399,6 +399,11 @@ function weather(g, s, o = {}) {
   }
 }
 // a canvas colour map that doubles as its own bump map — dark seams and cracks read as recessed
+// stone and slate: the same, plus a faint, cold specular sheen that glints off the worn faces in the sun
+const COLD_SPEC = new THREE.Color(0xbcd2ff);
+function glintMat(tex, rough, bump, extra = {}) {
+  return phys(0xffffff, rough, 0, { map: tex, bumpMap: tex, bumpScale: bump, specularColor: COLD_SPEC, specularIntensity: 1, ...extra });
+}
 function surfMat(tex, rough = 0.92, bump = 2, metal = 0, extra = {}) {
   return std(0xffffff, rough, metal, { map: tex, bumpMap: tex, bumpScale: bump, ...extra });
 }
@@ -453,7 +458,7 @@ const stoneTex = canvasTex(256, (g, s) => {
   }
   weather(g, s, { streaks: 26, streakA: 0.3, damp: 0.4, dampA: 0.45, blotches: 30, moss: 0.55, grit: 3000 });
 });
-const stoneM = surfMat(stoneTex, 0.95, 3); stoneM.userData.world = 3.5;
+const stoneM = glintMat(stoneTex, 0.66, 3); stoneM.userData.world = 3.5;
 
 (function buildWall() {
   const R = 18.6, N = 124, GATE = 0.13;
@@ -641,7 +646,7 @@ function buildTown() {
   // tw/course: tile size (m); lift: how far each course's butt stands proud; jit: per-tile wobble; sag: belly between eave and ridge
   const ROOF = {
     clay:    { mat: surfMat(clayTex, 0.9, 2, 0, { side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
-    slate:   { mat: surfMat(slateTex, 0.8, 1.5, 0, { side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
+    slate:   { mat: glintMat(slateTex, 0.55, 1.5, { side: THREE.DoubleSide, clearcoat: 0.12, clearcoatRoughness: 0.35 }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
     shingle: { mat: surfMat(shingleTex, 0.95, 2, 0, { side: THREE.DoubleSide }), tw: 0.24, course: 0.24, lift: 0.045, jit: 0.6, sag: 0.12, ridge: 0.1 },
     thatch:  { mat: surfMat(thatchTex, 1, 3, 0, { side: THREE.DoubleSide }), tw: 0.5, course: 0.42, lift: 0.13, jit: 0.3, sag: 0.18, ridge: 0.3, bulge: true },
   };
@@ -1629,10 +1634,11 @@ function buildHeroGLB(tpl) {
     sash: std(0x7a2418, 0.92, 0, { ...vc, side: THREE.DoubleSide }),
     boot: std(0x2b1d12, 0.78, 0, vc),
     hair: std(0x2a1b12, 1, 0, vc),
-    steel: std(0x7c7c7a, 0.66, 0.6, { ...vc, envMapIntensity: 0.35 }),
-    iron: std(0x3e3d3b, 0.72, 0.55, { ...vc, envMapIntensity: 0.3 }),
-    mail: std(0x5e5f60, 0.68, 0.6, { ...vc, side: THREE.DoubleSide, envMapIntensity: 0.35 }),
-    metal: std(0xb4bcc4, 0.3, 1.0, { ...vc, emissive: 0x000000, envMapIntensity: 0.8 }),
+    // metals: worn and dull underneath, with a thin clear layer that throws a small, crisp, cold highlight
+    steel: phys(0x868b92, 0.48, 0.75, { ...vc, clearcoat: 0.35, clearcoatRoughness: 0.22, envMapIntensity: 0.6 }),
+    iron: phys(0x46474a, 0.6, 0.65, { ...vc, clearcoat: 0.18, clearcoatRoughness: 0.3, envMapIntensity: 0.45 }),
+    mail: phys(0x5f6266, 0.6, 0.7, { ...vc, side: THREE.DoubleSide, clearcoat: 0.15, clearcoatRoughness: 0.4, envMapIntensity: 0.45 }),
+    metal: phys(0xb8c0c8, 0.24, 1.0, { ...vc, emissive: 0x000000, clearcoat: 0.4, clearcoatRoughness: 0.12, envMapIntensity: 0.8 }),
     eye: std(0xb8b0a2, 0.45, 0, vc),
   };
   const model = tpl.clone(true);

@@ -292,28 +292,24 @@ for side, sx in (('L', 1), ('R', -1)):
     kn = empty('Knee' + side, hp, (0, -0.44, 0))
     legs[side] = (sx, hp, kn)
 
-# ------------------------------------------------------------------ hips: trousers seat, quilted skirt, belt, sash, tassets, pouch, dagger
+# ------------------------------------------------------------------ hips: trousers seat, quilted coat skirt, belts, pouch, dagger
 P = Part()
 sec = resample([(-0.15, 0.15, 0.105), (-0.07, 0.168, 0.118), (0.02, 0.172, 0.122), (0.1, 0.168, 0.12), (0.16, 0.165, 0.118)], 9)
 tube(P, [V(0, y, 0) for y, _, _ in sec], [(rx, rz) for _, rx, rz in sec], 'Cloth', n=24, tint=0.9, mod=wrinkles(3.0, 0.02))
-# the gambeson's quilted skirt: four panels split at the legs so they can swing
-skirt_mod = lambda i, j, u, a: 1 - 0.012 + 0.024 * abs(math.sin(j * math.pi / 3))
-for a0, a1 in ((-0.62, 0.62), (math.pi - 0.62, math.pi + 0.62), (0.78, 2.36), (-2.36, -0.78)):
-    curtain(P, 0.0, 0.04, -0.27, 0.168, 0.215, a0, a1, 'Cloth', rows=8, cols=18, depth=(1.0, 0.74), mod=skirt_mod, tint=0.92, thick=0.01)
+# the gambeson continues as a quilted coat skirt to mid-thigh, slit front and back for walking and riding
+skirt_mod = lambda i, j, u, a: (1 - 0.01 + 0.02 * abs(math.sin(j * math.pi / 2.5))) * (1 + 0.04 * u * noise.noise(V(a * 3, u * 2, 0.5)))
+for a0, a1 in ((0.1, math.pi - 0.1), (math.pi + 0.1, TAU - 0.1)):
+    curtain(P, 0.0, 0.04, -0.24, 0.168, 0.212, a0, a1, 'Cloth', rows=9, cols=40, depth=(1.0, 0.8), mod=skirt_mod, tint=0.92, thick=0.01)
 torus(P, V(0, 0.075, 0), (0.183, 0.133), 0.024, 'Leather', n_around=40, squash=1.4, tint=1.1)  # belt
 buckle(P, V(0, 0.075, 0.16), w=0.04, h=0.036)
 plate(P, V(0.03, 0.075, 0.158), V(0.4, -1, 0.1), 0.035, 0.09, 0.005, 'Leather', out=V(0, 0, 1), flare=1.0, tint=1.1)  # strap end
-torus(P, V(0, 0.015, 0), (0.186, 0.136), 0.03, 'Sash', n_around=40, squash=1.1)
-for k, x in enumerate((0.1, 0.13)):  # knotted sash tails at the left hip
-    plate(P, V(x, 0.0, 0.12), V(0.15 * k, -1, 0.2), 0.06, 0.26 - k * 0.05, 0.008, 'Sash', out=V(0.4, 0, 1))
-ellipsoid(P, V(0.11, 0.005, 0.135), (0.03, 0.026, 0.02), 'Sash', seg=10, rings=8, tint=0.85)  # the knot
-for z, out in ((0.19, V(0, 0, 1)), (-0.19, V(0, 0, -1))):  # front / back leather tassets over the skirt
-    for x in (-0.075, 0.075):
-        plate(P, V(x, 0.045, z), V(x * 0.5, -1, z * 0.9), 0.12, 0.22, 0.01, 'Leather', out=out)
-        for y in (0.0, -0.08):
-            rivet(P, V(x * (1 - y), y + 0.01, z * (1.02 - y * 0.85)))
-for sx in (-1, 1):
-    plate(P, V(sx * 0.2, 0.045, 0), V(sx * 0.4, -1, 0), 0.11, 0.18, 0.01, 'Leather', out=V(sx, 0, 0))
+# sword belt slung low across the hips, dropping toward the scabbard on the left
+sb = [V(math.sin(a) * 0.192, 0.0 - 0.045 * max(0.0, math.sin(a)) - 0.012 * math.cos(a), math.cos(a) * 0.142) for a in (TAU * k / 48 for k in range(49))]
+tube(P, sb, [(0.006, 0.02)] * len(sb), 'Leather', n=6, up_hint=V(0, 1, 0), cap=False, endcap=False, tint=0.95)
+buckle(P, sb[0] + V(0, 0, 0.008), w=0.034, h=0.03)
+for a in (0.9, 1.4):  # frog loops holding the scabbard
+    p = V(math.sin(a) * 0.194, -0.045 * math.sin(a) - 0.012 * math.cos(a) - 0.035, math.cos(a) * 0.144)
+    plate(P, p + V(0, 0.035, 0), V(0, -1, 0), 0.022, 0.06, 0.005, 'Leather', out=V(math.sin(a), 0, math.cos(a)), flare=1.0, tint=1.1)
 ellipsoid(P, V(-0.18, -0.005, 0.1), (0.045, 0.055, 0.032), 'Leather', seg=12, rings=8, tint=1.15)  # pouch
 plate(P, V(-0.18, 0.05, 0.13), V(0, -1, 0.15), 0.07, 0.05, 0.005, 'Leather', out=V(-0.3, 0, 1), flare=1.0, tint=1.25)  # pouch flap
 # rondel dagger at the small of the back
@@ -355,17 +351,21 @@ strap = [V(0.19, 0.47, 0.06), V(0.09, 0.37, 0.165), V(-0.04, 0.22, 0.17), V(-0.1
 tube(P, strap, [(0.035, 0.008)] * len(strap), 'Leather', n=8, up_hint=V(0, 0, 1), tint=1.25)
 for k in range(1, 3):
     rivet(P, strap[k] + V(0, 0, 0.01), r=0.006)
-for sx in (-1, 1):  # pauldrons: three overlapping steel lames with rolled edges and a leather strap
-    for k in range(3):
-        rot = Matrix.Rotation(sx * (-0.35 - k * 0.12), 3, 'Z')
-        c = V(sx * (0.25 + k * 0.012), 0.552 - k * 0.05, 0.0)
-        ellipsoid(P, c, (0.1 + k * 0.006, 0.043, 0.104 + k * 0.004), 'Steel', seg=28, rings=12,
-                  deform=lambda p: V(p.x, p.y * (0.35 if p.y < 0 else 1), p.z), rot=rot, tint=1.0 - k * 0.05)
-        for zz in (-0.07, 0.07):
-            rivet(P, c + rot @ V(sx * 0.06, 0.03, zz), r=0.006)
+for sx in (-1, 1):  # spaulders: a rounded cop cupping the shoulder, two narrow lames wrapping down the outside of the arm
+    rot = Matrix.Rotation(sx * -0.5, 3, 'Z')
+    c = V(sx * 0.262, 0.528, 0.0)
+    ellipsoid(P, c, (0.084, 0.078, 0.098), 'Steel', seg=32, rings=16, deform=lambda p: V(p.x, p.y * (0.25 if p.y < 0 else 1), p.z), rot=rot)
+    for zz in (-0.06, 0.0, 0.06):
+        rivet(P, c + rot @ V(0.0, 0.055, zz), r=0.0055)
+    for k in (1, 2):
+        rk = Matrix.Rotation(sx * (-1.0 - 0.18 * k), 3, 'Z')
+        ck = V(sx * (0.3 + 0.008 * k), 0.49 - 0.04 * k, 0.0)
+        ellipsoid(P, ck, (0.074 - 0.006 * k, 0.026, 0.088 - 0.006 * k), 'Steel', seg=28, rings=10,
+                  deform=lambda p: V(p.x, p.y * (0.3 if p.y < 0 else 1), p.z), rot=rk, tint=0.95)
+        rivet(P, ck + rk @ V(0.0, 0.02, 0.0), r=0.005)
 finalize(P, 'SpineMesh', spine)
 
-# ------------------------------------------------------------------ neck & head: face, beard, nasal helm, mail aventail
+# ------------------------------------------------------------------ neck & head: face, beard, nasal helm, mail coif
 P = Part()
 tube(P, [V(0, -0.03, 0.0), V(0, 0.04, 0.005), V(0, 0.11, 0.01)], [(0.07, 0.072), (0.066, 0.068), (0.064, 0.066)], 'Skin', n=16)
 finalize(P, 'NeckMesh', neck)
@@ -402,9 +402,11 @@ for k in range(12):
     a = TAU * k / 12
     rivet(P, V(math.sin(a) * 0.123, 0.142, -0.004 + math.cos(a) * 0.133), r=0.0065)
 tube(P, [V(0, 0.145, 0.125), V(0, 0.22, 0.04), V(0, 0.245, -0.03), V(0, 0.22, -0.11), V(0, 0.145, -0.13)], [(0.01, 0.006)] * 5, 'Iron', n=6, up_hint=V(1, 0, 0))
-# mail aventail hanging from the helm rim around the sides and back, leaving the face open
-curtain(P, 0.0, 0.135, -0.04, 0.128, 0.15, 1.05, TAU - 1.05, 'Mail', rows=10, cols=44, depth=(1.0, 1.05),
-        mod=lambda i, j, u, a: 1 + 0.004 * math.cos(j * math.pi) * (1 if i % 2 else -1) + 0.05 * u * u, tint=mail_tint, thick=0.005)
+# mail coif worn under the helm: it hugs the skull, covers the ears and nape and closes round the throat, framing the face
+ring_mod = lambda i, j, u, a: 1 + 0.004 * math.cos(j * math.pi) * (1 if i % 2 else -1)
+curtain(P, 0.0, 0.14, -0.035, 0.124, 0.098, 0.95, TAU - 0.95, 'Mail', rows=12, cols=48, depth=(1.0, 1.05),
+        mod=lambda i, j, u, a: ring_mod(i, j, u, a) * (1 + 0.07 * math.sin(math.pi * u)), tint=mail_tint, thick=0.005)
+curtain(P, 0.0, 0.03, -0.04, 0.094, 0.098, -1.0, 1.0, 'Mail', rows=4, cols=20, depth=(1.0, 1.1), mod=ring_mod, tint=mail_tint, thick=0.005)  # throat
 finalize(P, 'HeadMesh', head)
 
 # ------------------------------------------------------------------ arms: quilted sleeves, couters, vambraces, gauntlets
