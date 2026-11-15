@@ -1397,41 +1397,77 @@ function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 
   g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   node.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05);
 }
-// A synthesized human voice: a rough glottal buzz (sawtooth + noise, with jitter) through parallel vowel formants.
-// pitch/amp are arrays sampled evenly over dur; vowels morph between formant sets over the same span.
-const VOWELS = { a: [800, 1200, 2700], ae: [700, 1700, 2600], o: [520, 900, 2500], u: [350, 750, 2400], e: [450, 1900, 2600], uh: [600, 1100, 2500] };
-function voice({ dur, pitch, amp, vowels = ['a'], gain = 0.5, rough = 0.3, breath = 0.15, delay = 0 }) {
+// A synthesized male voice (no recordings). The pieces that make it read as human rather than a buzzer:
+//  · a glottal-pulse source whose harmonics fall off like real vocal folds (pressed/effortful = brighter),
+//  · five formants at male vowel frequencies and bandwidths, morphing between vowels,
+//  · slow random pitch drift, a little vibrato and loudness shimmer, baked at 10 ms resolution,
+//  · aspiration noise through the same formants (a breathy "h" onset and an exhale tail),
+//  · creak / vocal fry as sub-harmonic amplitude modulation (the voice "breaking"),
+//  · chest resonance and a short outdoor reverb.
+// pitch / amp / creak / breath are contours sampled evenly over dur.
+const VOWELS = {
+  a: [730, 1090, 2440, 3400, 3900], ae: [660, 1720, 2410, 3400, 3900], o: [570, 840, 2410, 3300, 3800],
+  u: [320, 870, 2240, 3300, 3800], uh: [520, 1190, 2390, 3350, 3850], e: [530, 1840, 2480, 3400, 3900],
+  n: [260, 1050, 2300, 3300, 3800], // clenched hum
+};
+const FBW = [70, 95, 130, 230, 300], FG = [1, 0.72, 0.36, 0.2, 0.12];
+let voiceRig = null;
+function getVoiceRig() {
+  if (voiceRig && voiceRig.ac === AC) return voiceRig;
+  const wave = tilt => { const N = 48, re = new Float32Array(N), im = new Float32Array(N); for (let k = 1; k < N; k++) im[k] = Math.pow(k, -tilt) * (k % 2 ? 1 : 0.85); return AC.createPeriodicWave(re, im); };
+  const ir = AC.createBuffer(2, AC.sampleRate * 0.9, AC.sampleRate);
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < d.length; i++) { const t = i / AC.sampleRate; d[i] = (Math.random() * 2 - 1) * Math.exp(-t * 6) * (t < 0.012 ? 0 : 1); } }
+  const verb = AC.createConvolver(); verb.buffer = ir; const wet = AC.createGain(); wet.gain.value = 0.16; verb.connect(wet).connect(master);
+  voiceRig = { ac: AC, soft: wave(1.9), pressed: wave(1.25), verb };
+  return voiceRig;
+}
+function voice({ dur, pitch, amp, vowels = ['uh'], creak = [0], breath = [0.15], effort = 0.5, gain = 0.5, delay = 0 }) {
   if (!AC) return;
-  const t = AC.currentTime + delay, n = 64;
-  const curve = (arr, f = v => v) => Float32Array.from({ length: n }, (_, i) => {
-    const x = (i / (n - 1)) * (arr.length - 1), j = Math.min(arr.length - 2, Math.floor(x)), u = x - j;
-    return f(lerp(arr[j], arr[j + 1] ?? arr[j], u), i);
-  });
-  // pitch with vocal jitter and a strained wobble
-  const src = AC.createOscillator(); src.type = 'sawtooth';
-  src.frequency.setValueCurveAtTime(curve(pitch, (v, i) => v * (1 + Math.sin(i * 1.7) * 0.012 + (Math.random() - 0.5) * rough * 0.08)), t, dur);
-  const sub = AC.createOscillator(); sub.type = 'square'; // octave-down growl gives the scream its rasp
-  sub.frequency.setValueCurveAtTime(curve(pitch, v => v * 0.5), t, dur);
-  const subG = AC.createGain(); subG.gain.value = rough * 0.35;
-  const shaper = AC.createWaveShaper(); const k = 1 + rough * 12;
-  shaper.curve = Float32Array.from({ length: 512 }, (_, i) => { const x = i / 255.5 - 1; return Math.tanh(k * x) / Math.tanh(k); });
-  const glottis = AC.createGain(); glottis.gain.value = 0.5;
-  src.connect(glottis); sub.connect(subG).connect(glottis);
-  const nsrc = AC.createBufferSource(); nsrc.buffer = noiseBuf; const nG = AC.createGain(); nG.gain.value = breath;
-  nsrc.connect(nG).connect(glottis);
-  glottis.connect(shaper);
-  const env = AC.createGain(); env.gain.value = 0;
-  env.gain.setValueCurveAtTime(curve(amp, v => v * gain), t, dur);
+  const rig = getVoiceRig(), t = AC.currentTime + delay, n = Math.max(8, Math.round(dur * 100));
+  const at = (arr, u) => { const x = u * (arr.length - 1), j = Math.min(arr.length - 2, Math.floor(x)); return arr.length < 2 ? arr[0] : lerp(arr[j], arr[j + 1], x - j); };
+  let drift = 0;
+  const f0 = new Float32Array(n), env = new Float32Array(n), sub = new Float32Array(n), cr = new Float32Array(n), br = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const u = i / (n - 1);
+    drift = drift * 0.9 + (Math.random() - 0.5) * 0.012;                       // slow, wandering pitch instability
+    const vib = Math.sin(i * 0.01 * 2 * Math.PI * 5.6) * 0.007 * Math.min(1, u * 4); // vibrato settles in after the attack
+    f0[i] = at(pitch, u) * (1 + drift + vib); sub[i] = f0[i] * 0.5;
+    env[i] = at(amp, u) * (1 + (Math.random() - 0.5) * 0.12) * gain;           // shimmer
+    cr[i] = Math.min(0.95, at(creak, u)); br[i] = at(breath, u) * gain;
+  }
+  env[0] = 0; env[n - 1] = 0;
+  const end = t + dur + 0.05;
+  // glottal source, amplitude-modulated at half the pitch for creak
+  const src = AC.createOscillator(); src.setPeriodicWave(effort > 0.6 ? rig.pressed : rig.soft); src.frequency.setValueCurveAtTime(f0, t, dur);
+  const am = AC.createGain(); am.gain.setValueCurveAtTime(cr.map(c => 1 - c * 0.5), t, dur);
+  const subO = AC.createOscillator(); subO.type = 'sine'; subO.frequency.setValueCurveAtTime(sub, t, dur);
+  const subG = AC.createGain(); subG.gain.setValueCurveAtTime(cr.map(c => c * 0.5), t, dur);
+  subO.connect(subG).connect(am.gain); src.connect(am);
+  const shaper = AC.createWaveShaper(), k = 1 + effort * 2.5; // vocal strain, kept gentle
+  shaper.curve = Float32Array.from({ length: 1024 }, (_, i) => { const x = i / 511.5 - 1; return Math.tanh(k * x) / Math.tanh(k); });
+  const vEnv = AC.createGain(); vEnv.gain.setValueCurveAtTime(env, t, dur);
+  am.connect(shaper).connect(vEnv);
+  // aspiration through the same vocal tract
+  const nsrc = AC.createBufferSource(); nsrc.buffer = noiseBuf; nsrc.loop = true;
+  const nhp = AC.createBiquadFilter(); nhp.type = 'highpass'; nhp.frequency.value = 400;
+  const nEnv = AC.createGain(); nEnv.gain.setValueCurveAtTime(br, t, dur);
+  nsrc.connect(nhp).connect(nEnv);
+  // formant bank
+  const tract = AC.createGain(); tract.gain.value = 1;
   const vs = vowels.map(v => VOWELS[v]);
-  [1, 0.55, 0.3].forEach((fg, fi) => {
-    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 5 + fi * 2;
-    bp.frequency.setValueCurveAtTime(curve(vs.map(f => f[fi])), t, dur);
-    const g = AC.createGain(); g.gain.value = fg * 3.6;
-    shaper.connect(bp).connect(g).connect(env);
-  });
-  env.connect(master);
-  for (const o of [src, sub]) { o.start(t); o.stop(t + dur + 0.05); }
-  nsrc.start(t, Math.random()); nsrc.stop(t + dur + 0.05);
+  for (let fi = 0; fi < 5; fi++) {
+    const curve = Float32Array.from({ length: n }, (_, i) => at(vs.map(f => f[fi]), i / (n - 1)) * (1 + effort * 0.06 * (fi === 0 ? 1 : 0)));
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = curve[0] / FBW[fi];
+    bp.frequency.setValueCurveAtTime(curve, t, dur);
+    const g = AC.createGain(); g.gain.value = FG[fi] * 6;
+    vEnv.connect(bp); nEnv.connect(bp); bp.connect(g).connect(tract);
+  }
+  const chest = AC.createBiquadFilter(); chest.type = 'lowshelf'; chest.frequency.value = 280; chest.gain.value = 5;
+  const air = AC.createBiquadFilter(); air.type = 'lowpass'; air.frequency.value = 5200;
+  tract.connect(chest).connect(air);
+  air.connect(master); air.connect(rig.verb);
+  for (const o of [src, subO]) { o.start(t); o.stop(end); }
+  nsrc.start(t, Math.random() * 1.5); nsrc.stop(end);
 }
 const SFX = {
   swing(step) { nz({ dur: 0.2 + step * 0.03, f0: 450, f1: 2600 + step * 300, q: 1.3, gain: 0.3 + step * 0.04 }); nz({ dur: 0.15, type: 'highpass', f0: 3500, f1: 6500, gain: 0.05 }); },
@@ -1455,21 +1491,32 @@ const SFX = {
     nz({ dur: 0.15, f0: 1800, f1: 1100, q: 2, gain: 0.1 });
   },
   snap() { nz({ dur: 0.07, f0: 3200, f1: 1500, q: 3, gain: 0.25 }); tn({ dur: 0.05, f0: 900, f1: 500, gain: 0.1 }); },
-  hurt(heavy) {
+  hurt(heavy, variant = (Math.random() * 4) | 0) {
     nz({ dur: 0.16, type: 'lowpass', f0: 900, f1: 260, gain: 0.32 });
-    const p = rand(0.92, 1.1);
-    if (heavy) voice({ dur: 0.75, pitch: [230 * p, 330 * p, 300 * p, 210 * p, 160 * p], amp: [0, 1, 0.9, 0.6, 0], vowels: ['ae', 'a', 'a', 'uh'], gain: 0.55, rough: 0.55, breath: 0.25, delay: 0.02 });
-    else [
-      () => voice({ dur: 0.32, pitch: [150 * p, 175 * p, 120 * p], amp: [0, 1, 0], vowels: ['uh', 'u'], gain: 0.5, rough: 0.35, breath: 0.3, delay: 0.02 }),   // "uhh"
-      () => voice({ dur: 0.42, pitch: [190 * p, 240 * p, 150 * p], amp: [0, 1, 0.7, 0], vowels: ['a', 'uh', 'o'], gain: 0.5, rough: 0.45, breath: 0.25, delay: 0.02 }), // "argh"
-      () => voice({ dur: 0.28, pitch: [170 * p, 130 * p], amp: [0, 1, 0], vowels: ['e', 'uh'], gain: 0.45, rough: 0.3, breath: 0.35, delay: 0.02 }),      // "hngh"
-    ][(Math.random() * 3) | 0]();
+    const p = rand(0.9, 1.1), d = 0.03;
+    if (heavy) { // "HAAGH-hh": a pained cry forced out, cracking at the end, then a ragged breath out
+      voice({ dur: 0.85, pitch: [165 * p, 250 * p, 265 * p, 230 * p, 170 * p, 130 * p], amp: [0, 0.9, 1, 0.85, 0.45, 0.15, 0], vowels: ['ae', 'a', 'a', 'a', 'uh', 'uh'],
+        creak: [0.1, 0, 0, 0.15, 0.5, 0.8], breath: [0.9, 0.2, 0.12, 0.15, 0.35, 0.6, 0.3], effort: 0.8, gain: 0.36, delay: d });
+      return;
+    }
+    [
+      () => voice({ dur: 0.34, pitch: [118 * p, 148 * p, 132 * p, 100 * p], amp: [0, 1, 0.7, 0.2, 0], vowels: ['uh', 'uh', 'u'],           // "uhh!" punched out of the gut
+        creak: [0.2, 0, 0.3, 0.7], breath: [0.8, 0.15, 0.25, 0.5, 0.2], effort: 0.5, gain: 0.49, delay: d }),
+      () => voice({ dur: 0.42, pitch: [150 * p, 195 * p, 175 * p, 128 * p], amp: [0, 1, 0.85, 0.35, 0], vowels: ['a', 'a', 'uh'],             // "agh!"
+        creak: [0, 0, 0.25, 0.75], breath: [0.6, 0.12, 0.2, 0.5, 0.2], effort: 0.65, gain: 0.5, delay: d }),
+      () => voice({ dur: 0.36, pitch: [112 * p, 128 * p, 120 * p, 96 * p], amp: [0, 0.8, 1, 0.4, 0], vowels: ['n', 'n', 'uh'],              // "hnngh" through clenched teeth
+        creak: [0.3, 0.2, 0.4, 0.8], breath: [0.5, 0.35, 0.3, 0.5, 0.2], effort: 0.55, gain: 0.21, delay: d }),
+      () => voice({ dur: 0.26, pitch: [135 * p, 120 * p, 98 * p], amp: [0, 0.6, 1, 0.3, 0], vowels: ['u', 'u', 'uh'],                         // "hoof" — winded
+        creak: [0, 0.2, 0.6], breath: [1.4, 0.9, 0.3, 0.4, 0.15], effort: 0.35, gain: 0.32, delay: d }),
+    ][variant]();
   },
-  // death scream: a long, cracking cry that chokes off into a groan
+  // death scream: a long, raw cry that strains, breaks, and collapses into a dying groan and a last breath
   scream() {
-    const p = rand(0.95, 1.05);
-    voice({ dur: 1.7, pitch: [300 * p, 470 * p, 520 * p, 500 * p, 440 * p, 330 * p, 240 * p], amp: [0, 1, 1, 0.95, 0.85, 0.5, 0], vowels: ['ae', 'a', 'a', 'a', 'o', 'uh'], gain: 0.45, rough: 0.7, breath: 0.25 });
-    voice({ dur: 1.2, pitch: [140 * p, 120 * p, 95 * p, 80 * p], amp: [0, 0.8, 0.5, 0], vowels: ['uh', 'o', 'u'], gain: 0.4, rough: 0.6, breath: 0.45, delay: 1.55 });
+    const p = rand(0.93, 1.07);
+    voice({ dur: 1.9, pitch: [190 * p, 300 * p, 345 * p, 360 * p, 340 * p, 300 * p, 230 * p, 165 * p], amp: [0, 0.85, 1, 1, 0.95, 0.8, 0.5, 0.2, 0],
+      vowels: ['ae', 'a', 'a', 'a', 'a', 'o', 'uh'], creak: [0.05, 0, 0, 0.1, 0.2, 0.45, 0.75, 0.9], breath: [1.0, 0.18, 0.12, 0.12, 0.18, 0.3, 0.5, 0.6, 0.3], effort: 1, gain: 0.39 });
+    voice({ dur: 1.5, pitch: [118 * p, 108 * p, 96 * p, 84 * p, 78 * p], amp: [0, 0.7, 0.55, 0.3, 0.1, 0], vowels: ['uh', 'o', 'u', 'u'],
+      creak: [0.6, 0.7, 0.85, 0.95], breath: [0.4, 0.3, 0.45, 0.8, 0.5, 0.2], effort: 0.3, gain: 0.35, delay: 1.75 });
   },
   step(heavy) {
     nz({ dur: heavy ? 0.13 : 0.06, type: 'lowpass', f0: heavy ? 260 : 480, f1: 90, gain: heavy ? 0.32 : 0.09 });
