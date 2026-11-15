@@ -944,35 +944,6 @@ function bakeStatic(group) {
   }
 }
 
-// spectators on the stands — instanced, they jump when blood is drawn
-let crowdExcite = 0;
-const crowd = (() => {
-  const spots = [];
-  for (const [r, y] of STAND_TIERS) for (let i = 0; i < 70; i++) {
-    const a = rand(0, Math.PI * 2);
-    if (Math.abs(angWrap(a - Math.PI)) < 0.45) continue;
-    spots.push({ a, r: r + rand(-0.3, 0.3), y: y + 0.11, ph: rand(0, 6), sp: rand(0.8, 1.3) });
-  }
-  const bodies = new THREE.InstancedMesh(capsule(0.22, 0.55), std(0xffffff, 0.9), spots.length);
-  const heads = new THREE.InstancedMesh(sphere(0.16, 10, 8), std(0xc89a7a, 0.7), spots.length);
-  const tunic = [0x4a2218, 0x26364a, 0x45452a, 0x5a4e3c, 0x2e4230, 0x605444, 0x3a3044, 0x5e2c18];
-  const c = new THREE.Color();
-  spots.forEach((s, i) => { bodies.setColorAt(i, c.setHex(tunic[i % tunic.length])); });
-  bodies.castShadow = heads.castShadow = true;
-  scene.add(bodies, heads);
-  const d = new THREE.Object3D();
-  return {
-    update(t) {
-      spots.forEach((s, i) => {
-        const jump = Math.max(0, Math.sin(t * (2.5 + crowdExcite * 7) * s.sp + s.ph)) * (0.03 + crowdExcite * 0.35);
-        d.position.set(Math.sin(s.a) * s.r, s.y + 0.5 + jump, Math.cos(s.a) * s.r);
-        d.rotation.set(0, s.a + Math.PI, Math.sin(t * 1.3 + s.ph) * 0.05); d.updateMatrix(); bodies.setMatrixAt(i, d.matrix);
-        d.position.y += 0.52; d.updateMatrix(); heads.setMatrixAt(i, d.matrix);
-      });
-      bodies.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
-    },
-  };
-})();
 
 // props scattered around the edge
 const banners = [];
@@ -1651,16 +1622,18 @@ const hero = buildHero();
 function buildHeroGLB(tpl) {
   const vc = { vertexColors: true };
   const M = {
-    skin: phys(0xc4906f, 0.6, 0, { ...vc, sheen: 0.3, sheenColor: 0xffd8c0 }),
-    leather: phys(0x5a3622, 0.55, 0, { ...vc, clearcoat: 0.55, clearcoatRoughness: 0.3 }),
-    cloth: phys(0x3d3c31, 0.85, 0, { ...vc, sheen: 0.7, sheenColor: 0x9fb4cc, sheenRoughness: 0.45 }),
-    sash: phys(0x8c2a1c, 0.8, 0, { ...vc, sheen: 0.5, sheenColor: 0xd0c0c8 }),
-    boot: phys(0x2b1d12, 0.45, 0, { ...vc, clearcoat: 0.6, clearcoatRoughness: 0.25 }),
+    // worn, matte finishes: skin with a soft sheen, dry leather, dull brushed steel; only the blade keeps an edge of shine
+    skin: phys(0x9a6e55, 0.74, 0, { ...vc, sheen: 0.25, sheenColor: 0xd8a890, sheenRoughness: 0.6 }),
+    leather: std(0x50301d, 0.82, 0, vc),
+    cloth: std(0x3d3c31, 0.96, 0, { ...vc, side: THREE.DoubleSide }),
+    sash: std(0x7a2418, 0.92, 0, { ...vc, side: THREE.DoubleSide }),
+    boot: std(0x2b1d12, 0.78, 0, vc),
     hair: std(0x2a1b12, 1, 0, vc),
-    steel: phys(0xb4bfcc, 0.2, 1.0, { ...vc, clearcoat: 0.9, clearcoatRoughness: 0.12 }),
-    iron: phys(0x5c6168, 0.3, 0.9, { ...vc, clearcoat: 0.6, clearcoatRoughness: 0.2 }),
-    metal: phys(0xd8e0ea, 0.12, 1.0, { ...vc, clearcoat: 1, clearcoatRoughness: 0.06, emissive: 0x000000 }),
-    eye: phys(0x111111, 0.1, 0, { ...vc, clearcoat: 1 }),
+    steel: std(0x7c7c7a, 0.66, 0.6, { ...vc, envMapIntensity: 0.35 }),
+    iron: std(0x3e3d3b, 0.72, 0.55, { ...vc, envMapIntensity: 0.3 }),
+    mail: std(0x5e5f60, 0.68, 0.6, { ...vc, side: THREE.DoubleSide, envMapIntensity: 0.35 }),
+    metal: std(0xb4bcc4, 0.3, 1.0, { ...vc, emissive: 0x000000, envMapIntensity: 0.8 }),
+    eye: std(0xb8b0a2, 0.45, 0, vc),
   };
   const model = tpl.clone(true);
   model.traverse(o => { if (o.isMesh) { o.material = M[(o.material.name || '').toLowerCase()] || M.cloth; o.castShadow = true; o.receiveShadow = true; } });
@@ -1846,7 +1819,6 @@ class Beast {
     bloodBurst(hp, dir, heavy ? 34 : 20);
     feathers(hp, heavy ? 6 : 3, [this.pal.plume >> 16 & 255, this.pal.plume >> 8 & 255, this.pal.plume & 255].map(v => v / 255 * 0.6));
     hitStop = heavy ? 0.12 : 0.07; shake = Math.max(shake, heavy ? 0.55 : 0.3); SFX.hit(heavy);
-    crowdExcite = Math.min(1, crowdExcite + (heavy ? 0.6 : 0.35));
     if (this.hp <= 0) { this.die(dir); return; }
     this.hitChain = time - this.lastHit < 1.7 ? this.hitChain + 1 : 1; this.lastHit = time;
     if (this.state === 'lunge' && !heavy) return; // hyper-armour mid-charge
@@ -1865,7 +1837,7 @@ class Beast {
   die(dir) {
     this.dead = true; this.hp = 0; this.setState('dead'); this.vel.copy(dir).multiplyScalar(4);
     this.dieRoll = Math.random() < 0.5 ? 1.4 : -1.4;
-    SFX.screech(this.pitch * 0.8); slowMo = 0.9; crowdExcite = 1;
+    SFX.screech(this.pitch * 0.8); slowMo = 0.9;
     setTimeout(() => { SFX.thud(); dust(this.pos, 22, 1.2, 1.6); addDecal(this.pos.x, this.pos.z, 1.3); }, 520);
     onBeastDeath();
   }
@@ -2297,7 +2269,7 @@ function startRound(n) {
 function onBeastDeath() {
   if (beasts.every(e => e.dead) && game.state === 'play') {
     game.state = 'between'; game.betweenT = 4.2;
-    setTimeout(() => showMsg('VICTORY', 'the crowd roars — catch your breath', 3), 600);
+    setTimeout(() => showMsg('VICTORY', 'catch your breath', 3), 600);
   }
 }
 function onPlayerDeath() {
@@ -2504,8 +2476,6 @@ function loop(now) {
   clockEl.crackle -= rdt;
   if (clockEl.crackle <= 0 && AC) { clockEl.crackle = rand(0.05, 0.35); SFX.crackle?.(); }
   updateBanners();
-  crowdExcite = Math.max(0, crowdExcite - rdt * 0.35);
-  crowd.update(time);
   const fighting = game.state === 'play' && beasts.some(e => !e.dead && e.state !== 'wait');
   Music.setIntensity(fighting ? 1 : game.state === 'play' || game.state === 'between' ? 0.45 : 0.2);
   fxAdd.update(dt); fxNorm.update(dt); trail.update(dt);
