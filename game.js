@@ -2,6 +2,7 @@
 // All geometry, textures and sounds are generated procedurally at runtime.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const V3 = THREE.Vector3;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1144,17 +1145,44 @@ const PALETTES = [
   { plume: 0x5a5146, rust: 0xa0742e, belly: 0xa08868, name: 'ASHEN THORNBEAK' },
   { plume: 0x1d1a1c, rust: 0x8e1c18, belly: 0x5a3a30, name: 'BLOODCREST THORNBEAK' },
 ];
-function buildBeast(scale, pal) {
-  const M = {
-    // glossy, oily plumage with a cold blue sheen; lacquered beak, thorns and talons
-    plume: phys(pal.plume, 0.5, 0, { sheen: 1, sheenColor: 0xb8d0ff, sheenRoughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.35 }),
-    rust: phys(pal.rust, 0.55, 0, { sheen: 0.8, sheenColor: 0xd4e2ff, sheenRoughness: 0.35, clearcoat: 0.2 }),
-    belly: phys(pal.belly, 0.6, 0, { sheen: 0.6, sheenColor: 0xe0e8ff }),
-    bone: phys(0xe2d6bc, 0.25, 0, { clearcoat: 1, clearcoatRoughness: 0.08 }),
-    scale: phys(0x5e4a33, 0.35, 0.1, { clearcoat: 0.85, clearcoatRoughness: 0.18 }),
-    claw: phys(0x1f1710, 0.18, 0.2, { clearcoat: 1, clearcoatRoughness: 0.04 }),
+// glossy, oily plumage with a cold blue sheen; lacquered beak, thorns and talons
+function beastMaterials(pal, vc) {
+  const o = { vertexColors: vc };
+  return {
+    plume: phys(pal.plume, 0.5, 0, { ...o, sheen: 1, sheenColor: 0xb8d0ff, sheenRoughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.35 }),
+    rust: phys(pal.rust, 0.55, 0, { ...o, sheen: 0.8, sheenColor: 0xd4e2ff, sheenRoughness: 0.35, clearcoat: 0.2 }),
+    belly: phys(pal.belly, 0.6, 0, { ...o, sheen: 0.6, sheenColor: 0xe0e8ff }),
+    bone: phys(0xe2d6bc, 0.25, 0, { ...o, clearcoat: 1, clearcoatRoughness: 0.08 }),
+    scale: phys(0x5e4a33, 0.35, 0.1, { ...o, clearcoat: 0.85, clearcoatRoughness: 0.18 }),
+    claw: phys(0x1f1710, 0.18, 0.2, { ...o, clearcoat: 1, clearcoatRoughness: 0.04 }),
     eye: phys(0x221100, 0.1, 0, { clearcoat: 1, clearcoatRoughness: 0, emissive: 0xffa21a, emissiveIntensity: 2.4 }),
   };
+}
+// The Blender-built model (tools/build_thornbeak.py → models/thornbeak.glb). Its named joints are
+// driven by the same procedural animation as before; falls back to the primitive model if it fails to load.
+let beastTemplate = null;
+function buildBeast(scale, pal) {
+  if (!beastTemplate) return buildBeastPrimitive(scale, pal);
+  const M = beastMaterials(pal, true);
+  const root = new THREE.Group();
+  const model = beastTemplate.clone(true);
+  root.add(model);
+  const f = n => model.getObjectByName(n);
+  const r = {
+    root, M, body: f('Body'), n1: f('Neck1'), n2: f('Neck2'), head: f('Head'), jaw: f('Jaw'), tail: f('Tail'),
+    lHip: f('HipL'), lKn: f('KneeL'), lAn: f('AnkleL'), rHip: f('HipR'), rKn: f('KneeR'), rAn: f('AnkleR'),
+  };
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = M[(o.material.name || '').toLowerCase()] || M.plume;
+    o.castShadow = true; o.receiveShadow = true;
+  });
+  root.scale.setScalar(scale);
+  r.flashMats = [M.plume, M.rust, M.belly];
+  return r;
+}
+function buildBeastPrimitive(scale, pal) {
+  const M = beastMaterials(pal, false);
   const root = new THREE.Group();
   const r = { root, M };
   const body = new THREE.Group(); body.position.y = 1.2; root.add(body); r.body = body;
@@ -1233,7 +1261,7 @@ class Beast {
     this.level = level;
     const pal = PALETTES[Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2))];
     this.name = pal.name;
-    this.s = 1.12 + Math.min(level, 6) * 0.03;
+    this.s = 0.82 + Math.min(level, 6) * 0.03; // smaller than before: roughly chest-high to the hero
     this.rig = buildBeast(this.s, pal); scene.add(this.rig.root);
     this.pal = pal;
     this.pos = new V3(x, 0, -19.5); this.yaw = 0; this.vel = new V3();
@@ -1912,6 +1940,10 @@ async function preload() {
   };
   let warm;
   await step('RAISING THE TOWN…', 15, () => buildTown());
+  await step('CARVING THE THORNBEAK…', 25, async () => {
+    try { beastTemplate = (await new GLTFLoader().loadAsync('models/thornbeak.glb')).scene; }
+    catch (e) { console.warn('thornbeak.glb failed to load, using primitive model', e); }
+  });
   await step('SUMMONING THE BEAST…', 35, () => {
     warm = new Beast(1, 0, 0); warm.pos.set(0, 0, 0); warm.rig.root.position.set(0, 0, 0);
     setSwordInHand(true);
