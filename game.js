@@ -27,7 +27,7 @@ renderer.toneMappingExposure = 0.9;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0xb2c3d3, 0.0052);
+scene.fog = new THREE.FogExp2(0x8e9296, 0.0058);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 400);
 camera.position.set(0, 4, 14);
 
@@ -68,32 +68,152 @@ function canvasTex(size, draw, rep = 1) {
 
 // ============================================================ sky + lights
 const SUN_DIR = new V3(0.38, 0.8, 0.46).normalize();
-const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), new THREE.ShaderMaterial({
+// A brooding, hazy sky: warped, drifting cumulus lit from the sun side with dark bellies, thin cirrus above,
+// a soft sun halo burning through the haze, and lightning that flickers inside the clouds.
+const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { sunDir: { value: SUN_DIR } },
+  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) } },
   vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `varying vec3 vD; uniform vec3 sunDir;
+  fragmentShader: `varying vec3 vD; uniform vec3 sunDir; uniform float time; uniform float flash; uniform vec3 flashDir;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
     float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
       return mix(mix(hash(i), hash(i+vec2(1,0)), u.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y); }
-    float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ v += a*noise(p); p *= 2.03; a *= 0.5; } return v; }
+    float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 6; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; }
     void main(){
       vec3 d = normalize(vD); float h = d.y;
-      vec3 zen = vec3(0.17,0.36,0.70), hor = vec3(0.70,0.80,0.90);
-      vec3 c = mix(hor, zen, pow(smoothstep(0.0, 0.9, h), 0.6));
-      c = mix(c, vec3(0.45,0.5,0.45), smoothstep(0.0, -0.12, h));
+      vec3 zen = vec3(0.09,0.14,0.24), mid = vec3(0.30,0.36,0.44), hor = vec3(0.60,0.58,0.54);
+      vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
+      c = mix(c, zen, smoothstep(0.18, 0.95, h));
+      c = mix(c, vec3(0.30,0.31,0.28), smoothstep(0.0, -0.15, h));
       float s = max(dot(d, sunDir), 0.0);
-      c += vec3(1.0,0.96,0.88) * pow(s, 900.0) * 8.0 + vec3(1.0,0.92,0.75) * pow(s, 8.0) * 0.22;
-      if (h > 0.0) {
-        vec2 uv = d.xz / (h + 0.1) * 1.4;
-        float cl = smoothstep(0.52, 0.85, fbm(uv)) * smoothstep(0.0, 0.2, h);
-        vec3 cc = mix(vec3(0.97,0.97,0.99), vec3(0.66,0.71,0.79), smoothstep(0.62, 1.0, fbm(uv * 1.7 + 3.0)));
-        c = mix(c, cc, cl * 0.9);
+      vec3 sunCol = vec3(1.0,0.86,0.66);
+      c += sunCol * (pow(s, 5.0) * 0.18 + pow(s, 48.0) * 0.35);
+      float cov = 0.0;
+      if (h > -0.03) {
+        vec2 uv = d.xz / (h + 0.13) * 1.15;
+        vec2 w = vec2(time * 0.006, time * 0.0025);
+        vec2 q = uv + w + 0.55 * vec2(fbm(uv * 0.7 - w), fbm(uv * 0.7 + 3.1 + w)); // domain warp → billowing shapes
+        float n = fbm(q);
+        cov = smoothstep(0.40, 0.74, n) * smoothstep(-0.03, 0.18, h);
+        float n2 = fbm(q + normalize(sunDir.xz + 1e-4) * 0.09);                   // one step toward the sun
+        float lit = clamp((n - n2) * 4.0 + 0.45, 0.0, 1.0);
+        vec3 belly = vec3(0.16,0.17,0.20), top = vec3(0.86,0.83,0.78);
+        vec3 cc = mix(belly, top, lit * 0.75 + smoothstep(0.75, 0.4, n) * 0.25);
+        cc += sunCol * pow(s, 10.0) * (1.0 - smoothstep(0.5, 0.8, n)) * 0.9;     // silver lining near the sun
+        cc = mix(cc, hor, smoothstep(0.25, 0.0, h) * 0.55);                      // distant clouds melt into the haze
+        c = mix(c, cc, cov * 0.94);
+        float ci = fbm(vec2(uv.x * 0.6, uv.y * 2.4) + w * 2.0);                  // high cirrus streaks
+        c = mix(c, vec3(0.80,0.80,0.80), smoothstep(0.55, 0.9, ci) * 0.18 * (1.0 - cov) * smoothstep(0.05, 0.4, h));
+        float g = pow(max(dot(d, flashDir), 0.0), 10.0);                         // lightning lights the clouds from inside
+        c += vec3(0.55,0.65,1.0) * flash * g * (0.25 + cov * 1.4);
       }
+      c = mix(c, hor * 1.04, exp(-max(h, 0.0) * 10.0) * 0.55);                    // thick haze on the horizon
+      c += sunCol * pow(s, 1400.0) * 5.0 * (1.0 - cov * 0.9);
       gl_FragColor = vec4(c, 1.0);
     }`
 }));
 scene.add(sky);
+
+// ---- the barrier: a vast dome of force over the town, mostly invisible — a faint lattice that pulses,
+// glows where it meets the land, and crackles with arcs of lightning that send ripples across it
+const barrier = (() => {
+  const R = 150, HITS = 6;
+  const geo = new THREE.IcosahedronGeometry(R, 16); // non-indexed: every triangle has its own three corners
+  const n = geo.attributes.position.count, bary = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) bary[i * 3 + (i % 3)] = 1;
+  geo.setAttribute('bary', new THREE.BufferAttribute(bary, 3));
+  const hits = Array.from({ length: HITS }, () => new THREE.Vector4(0, 1, 0, 99));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+    uniforms: { time: { value: 0 }, hits: { value: hits } },
+    vertexShader: `attribute vec3 bary; varying vec3 vB; varying vec3 vN;
+      void main(){ vB = bary; vN = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vB; varying vec3 vN; uniform float time; uniform vec4 hits[${HITS}];
+      float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7))) * 43758.5453); }
+      void main(){
+        vec3 n = normalize(vN);
+        float e = min(min(vB.x, vB.y), vB.z);
+        float line = 1.0 - smoothstep(0.0, fwidth(e) * 1.6, e);
+        float node = smoothstep(0.93, 1.0, max(max(vB.x, vB.y), vB.z));
+        float base = exp(-max(n.y, 0.0) * 9.0);                                        // a curtain of light where it meets the land
+        float wave = pow(0.5 + 0.5 * sin(n.y * 11.0 - time * 0.9 + sin(atan(n.z, n.x) * 3.0) * 1.2), 60.0); // slow pulses climbing the dome
+        float sweep = pow(0.5 + 0.5 * sin(dot(n, normalize(vec3(sin(time*0.07), 0.3, cos(time*0.07)))) * 5.0 - time * 0.6), 90.0);
+        float cell = floor(hash(floor(n * 25.0) + floor(time * 5.0)) * 1.02);           // cells that stutter on and off
+        float I = line * (0.004 + base * 0.25 + wave * 0.12 + sweep * 0.2 + cell * 0.15) + node * (0.006 + wave * 0.12 + sweep * 0.2) + base * 0.03;
+        for (int i = 0; i < ${HITS}; i++) {
+          float age = hits[i].w; if (age > 3.0) continue;
+          float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0));
+          float ring = exp(-pow((d - age * 0.35) * 30.0, 2.0)) * exp(-age * 1.6);
+          float core = exp(-d * 30.0) * exp(-age * 5.0);
+          I += ring * (line * 1.6 + node + 0.15) + core * (0.6 + line * 2.0);
+        }
+        I *= smoothstep(-0.03, 0.02, n.y);
+        gl_FragColor = vec4(vec3(0.42, 0.68, 1.0) * I + vec3(0.6, 0.5, 1.0) * I * I * 0.4, 1.0);
+      }`,
+  });
+  const dome = new THREE.Mesh(geo, mat); dome.frustumCulled = false; dome.renderOrder = -1; scene.add(dome);
+
+  // lightning arcs: jagged random walks along the dome surface, drawn as a bright core with two offset glows
+  const MAXP = 90, arcs = [];
+  const arcMat = (op) => new THREE.LineBasicMaterial({ color: 0xcfe2ff, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+  for (let i = 0; i < 5; i++) {
+    const layers = [1, 0.35, 0.35].map((op, k) => {
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXP * 2 * 3), 3));
+      const l = new THREE.LineSegments(g, arcMat(op)); l.frustumCulled = false; l.visible = false; scene.add(l); return l;
+    });
+    arcs.push({ layers, life: 0, max: 0, seed: 0 });
+  }
+  let nextArc = 1.5, hitIdx = 0;
+  const tmp = new V3(), t1 = new V3(), t2 = new V3();
+  function walk(out, start, dir, steps, jag) {
+    const p = start.clone(); let d = dir.clone();
+    for (let i = 0; i < steps && out.length < MAXP; i++) {
+      t1.crossVectors(p, d).normalize();
+      d.addScaledVector(t1, rand(-jag, jag)).addScaledVector(p, -d.dot(p)).normalize(); // stay tangent to the sphere
+      const q = p.clone().addScaledVector(d, rand(0.012, 0.03)).normalize();
+      if (q.y < 0.02) break;
+      out.push([p.clone(), q.clone()]); p.copy(q);
+      if (Math.random() < 0.08 && steps - i > 4) walk(out, p, d.clone().addScaledVector(t1, rand(-1.2, 1.2)).normalize(), (steps - i) * 0.5 | 0, jag);
+    }
+  }
+  function spawn() {
+    const a = arcs.find(x => x.life <= 0); if (!a) return;
+    const theta = rand(0, Math.PI * 2), y = Math.random() < 0.4 ? rand(0.03, 0.2) : rand(0.2, 0.9);
+    const start = new V3(Math.cos(theta) * Math.sqrt(1 - y * y), y, Math.sin(theta) * Math.sqrt(1 - y * y));
+    const dir = tmp.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).addScaledVector(start, -tmp.dot(start)).normalize().clone();
+    const segs = []; walk(segs, start, dir, rand(18, 45) | 0, 0.9);
+    t1.crossVectors(start, dir).normalize(); t2.copy(dir);
+    a.layers.forEach((l, k) => {
+      const off = k === 0 ? 0 : (k === 1 ? 0.35 : -0.35), arr = l.geometry.attributes.position.array;
+      segs.forEach(([p, q], i) => {
+        for (const [j, v] of [[0, p], [1, q]]) { const o = (i * 2 + j) * 3; arr[o] = v.x * R + t1.x * off; arr[o + 1] = v.y * R + t1.y * off + (k ? off * 0.5 : 0); arr[o + 2] = v.z * R + t1.z * off; }
+      });
+      l.geometry.setDrawRange(0, segs.length * 2); l.geometry.attributes.position.needsUpdate = true; l.visible = true;
+    });
+    a.max = a.life = rand(0.18, 0.55); a.seed = rand(0, 100);
+    hits[hitIdx].set(start.x, start.y, start.z, 0); hitIdx = (hitIdx + 1) % HITS;
+    sky.material.uniforms.flash.value = Math.max(sky.material.uniforms.flash.value, rand(0.4, 1));
+    sky.material.uniforms.flashDir.value.copy(start);
+    SFX.zap(Math.min(1, 0.6 + y));
+  }
+  return {
+    spawn,
+    update(dt, time) {
+      mat.uniforms.time.value = time;
+      for (const h of hits) h.w += dt;
+      nextArc -= dt;
+      if (nextArc <= 0) { spawn(); if (Math.random() < 0.3) spawn(); nextArc = rand(0.8, 4); }
+      for (const a of arcs) {
+        if (a.life <= 0) continue;
+        a.life -= dt;
+        const f = a.life > 0 ? (0.4 + 0.6 * Math.abs(Math.sin(time * 70 + a.seed))) * Math.min(1, a.life / a.max * 3) : 0;
+        a.layers.forEach((l, k) => { l.material.opacity = f * (k ? 0.35 : 1); l.visible = a.life > 0; });
+      }
+      const fl = sky.material.uniforms.flash;
+      fl.value = Math.max(0, fl.value - dt * 5) * (0.7 + 0.3 * Math.random());
+    },
+  };
+})();
 // bake the sky into an environment map so every glossy surface picks up cold sky reflections
 {
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -1339,6 +1459,11 @@ const SFX = {
   thud() { tn({ dur: 0.45, f0: 85, f1: 28, gain: 0.9 }); nz({ dur: 0.35, type: 'lowpass', f0: 500, f1: 70, gain: 0.55 }); },
   dodge() { nz({ dur: 0.26, type: 'lowpass', f0: 900, f1: 180, gain: 0.25 }); },
   gong() { [98, 196.5, 247, 392.7, 523].forEach((f, i) => tn({ dur: 3.2 - i * 0.4, f0: f, f1: f * 0.995, gain: 0.22 / (i + 1), attack: 0.01 })); nz({ dur: 0.3, type: 'lowpass', f0: 600, f1: 100, gain: 0.3 }); },
+  // the barrier crackling somewhere far overhead, then a low rumble rolling across the town
+  zap(near = 1) {
+    for (let i = 0, t = 0; i < 6; i++, t += rand(0.015, 0.07)) nz({ dur: rand(0.02, 0.06), type: 'highpass', f0: rand(2500, 4500), f1: 1400, gain: 0.035 * near, delay: t });
+    nz({ dur: 1.4, type: 'lowpass', f0: 260, f1: 50, gain: 0.08 * near, attack: 0.15, delay: rand(0.3, 0.7) });
+  },
   whiff() { nz({ dur: 0.22, f0: 600, f1: 1600, q: 0.8, gain: 0.18 }); },
 };
 
@@ -2203,7 +2328,7 @@ let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8;
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
   if (!currentTarget() && P.state !== 'dead' && P.state !== 'attack') P.yaw -= e.movementX * 0.0024 * settings.sens;
-  camPitch = clamp(camPitch + e.movementY * 0.0018 * settings.sens, 0.02, 0.85);
+  camPitch = clamp(camPitch + e.movementY * 0.0018 * settings.sens, -0.75, 0.85);
 });
 addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) * 0.4, 2.8, 9); }, { passive: true });
 
@@ -2238,8 +2363,11 @@ function updateCamera(dt) {
   const cp = new V3(P.pos.x - Math.sin(camYaw) * hor, h, P.pos.z - Math.cos(camYaw) * hor);
   const rl = Math.hypot(cp.x, cp.z);
   if (rl > 18.0) { cp.x *= 18.0 / rl; cp.z *= 18.0 / rl; }
+  cp.y = Math.max(cp.y, groundH(cp.x, cp.z) + 0.4); // below level the camera hugs the ground and tilts its gaze up instead
+  const gazeUp = clamp((0.12 - camPitch) * 1.9, 0, 1.38);
   const look = new V3(P.pos.x, 1.45, P.pos.z).addScaledVector(new V3(Math.sin(camYaw), 0, Math.cos(camYaw)), 1.2);
-  if (target) look.lerp(new V3(target.pos.x, 1.2, target.pos.z), 0.22);
+  if (target) look.lerp(new V3(target.pos.x, 1.2, target.pos.z), 0.22 * (1 - gazeUp / 1.38));
+  look.y += Math.tan(gazeUp) * (hor + 1.2);
   camLook.lerp(look, 1 - Math.exp(-10 * dt));
   camera.position.lerp(cp, 1 - Math.exp(-14 * dt));
   if (shake > 0) { camera.position.add(new V3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(shake * 0.12)); shake = Math.max(0, shake - dt * 2.2); }
@@ -2304,6 +2432,7 @@ function loop(now) {
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
   updateTorches(dt, time);
+  barrier.update(dt, time); sky.material.uniforms.time.value = time;
   clockEl.crackle -= rdt;
   if (clockEl.crackle <= 0 && AC) { clockEl.crackle = rand(0.05, 0.35); SFX.crackle?.(); }
   updateBanners();
