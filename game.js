@@ -153,9 +153,11 @@ const barrier = (() => {
         float flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(dot(q, vec3(1.3, 2.1, 0.7)) * 2.2 - t * 1.6), 3.0);
         float memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35;      // faint walls of the cells
         float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
-        float veil = smoothstep(0.42, 0.75, fbm(p * 0.45 + vec3(t * 0.012, -t * 0.02, 0.0))); // where the skin shows at all
-        float base = exp(-max(n.y, 0.0) * 8.0);                              // thickest where it sinks into the land
-        float vis = 0.025 + veil * 0.42 + base * 0.55;
+        // the skin only surfaces in a few drifting patches; they swell, fade and wander so it is never visible everywhere
+        float pn = fbm(p * 0.38 + vec3(t * 0.02, -t * 0.03, t * 0.015)) + 0.12 * sin(t * 0.21 + n.x * 3.0);
+        float veil = smoothstep(0.56, 0.74, pn);
+        float base = exp(-max(n.y, 0.0) * 8.0) * smoothstep(0.45, 0.7, pn + 0.08); // thickest where it sinks into the land, also in patches
+        float vis = veil * 0.45 + base * 0.55;
         float I = (veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe;
         for (int i = 0; i < ${HITS}; i++) {
           float age = hits[i].w; if (age > 3.0) continue;
