@@ -1117,6 +1117,36 @@ const SWINGS = {
 const COMBO = ['chop', 'rl', 'lr', 'heavy'];
 
 const hero = buildHero();
+// Blender-built hero (tools/build_hero.py -> models/hero.glb); swapped in place of the primitive hero at load.
+function buildHeroGLB(tpl) {
+  const vc = { vertexColors: true };
+  const M = {
+    skin: phys(0xc4906f, 0.6, 0, { ...vc, sheen: 0.3, sheenColor: 0xffd8c0 }),
+    leather: phys(0x5a3622, 0.55, 0, { ...vc, clearcoat: 0.55, clearcoatRoughness: 0.3 }),
+    cloth: phys(0x3d3c31, 0.85, 0, { ...vc, sheen: 0.7, sheenColor: 0x9fb4cc, sheenRoughness: 0.45 }),
+    sash: phys(0x8c2a1c, 0.8, 0, { ...vc, sheen: 0.5, sheenColor: 0xd0c0c8 }),
+    boot: phys(0x2b1d12, 0.45, 0, { ...vc, clearcoat: 0.6, clearcoatRoughness: 0.25 }),
+    hair: std(0x2a1b12, 1, 0, vc),
+    steel: phys(0xb4bfcc, 0.2, 1.0, { ...vc, clearcoat: 0.9, clearcoatRoughness: 0.12 }),
+    iron: phys(0x5c6168, 0.3, 0.9, { ...vc, clearcoat: 0.6, clearcoatRoughness: 0.2 }),
+    metal: phys(0xd8e0ea, 0.12, 1.0, { ...vc, clearcoat: 1, clearcoatRoughness: 0.06, emissive: 0x000000 }),
+    eye: phys(0x111111, 0.1, 0, { ...vc, clearcoat: 1 }),
+  };
+  const model = tpl.clone(true);
+  model.traverse(o => { if (o.isMesh) { o.material = M[(o.material.name || '').toLowerCase()] || M.cloth; o.castShadow = true; o.receiveShadow = true; } });
+  const f = n => model.getObjectByName(n);
+  const root = new THREE.Group(); root.rotation.order = 'YXZ'; root.add(model);
+  const j = { hips: f('Hips'), spine: f('Spine'), neck: f('Neck'), lSh: f('ShoulderL'), lEl: f('ElbowL'), lHa: f('HandL'),
+    rSh: f('ShoulderR'), rEl: f('ElbowR'), rHa: f('HandR'), lHip: f('HipL'), lKn: f('KneeL'), rHip: f('HipR'), rKn: f('KneeR') };
+  const sword = f('Sword'), scab = f('Scabbard');
+  sword.removeFromParent(); scab.removeFromParent();
+  const mk = z => { const o = new THREE.Object3D(); o.position.z = z; sword.add(o); return o; };
+  const swordTip = mk(1.05), swordBase = mk(0.2), swordMid = mk(0.6);
+  const sheath = new THREE.Group(); sheath.position.set(0.22, 0.02, -0.04); sheath.rotation.set(2.45, 0, -0.12); j.hips.add(sheath);
+  scab.position.set(0, 0, 0); scab.rotation.set(0, 0, 0); sheath.add(scab); sheath.add(sword);
+  sword.position.set(0, 0, 0); sword.rotation.set(0, 0, 0);
+  return { root, j, sword, swordTip, swordBase, swordMid, sheath, bladeMat: M.metal };
+}
 scene.add(hero.root);
 const HJMAP = { spine: 'spine', neck: 'neck', lSh: 'lSh', lEl: 'lEl', rSh: 'rSh', rEl: 'rEl', rHa: 'rHa', lHip: 'lHip', lKn: 'lKn', rHip: 'rHip', rKn: 'rKn', hipR: 'hips' };
 function applyHero(p, k, dt) {
@@ -1941,6 +1971,10 @@ async function preload() {
   let warm;
   await step('RAISING THE TOWN…', 15, () => buildTown());
   await step('CARVING THE THORNBEAK…', 25, async () => {
+    try {
+      const h = (await new GLTFLoader().loadAsync('models/hero.glb')).scene;
+      scene.remove(hero.root); Object.assign(hero, buildHeroGLB(h)); scene.add(hero.root);
+    } catch (e) { console.warn('hero.glb failed to load, using primitive hero', e); }
     try { beastTemplate = (await new GLTFLoader().loadAsync('models/thornbeak.glb')).scene; }
     catch (e) { console.warn('thornbeak.glb failed to load, using primitive model', e); }
   });
