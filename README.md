@@ -1,8 +1,8 @@
-# Palisade Arena
+# Medieval Arena
 
 An original third-person arena duel that runs in the browser. You fight a Thornbeak, a thorn-backed flightless bird-beast, inside a torch-lit wooden stockade at dusk.
 
-**Play:** https://str3aml1n3.github.io/palisade-arena/
+**Play:** https://str3aml1n3.github.io/medieval-arena/
 
 Everything is generated at runtime with [three.js](https://threejs.org): the models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. There are no external art or audio assets.
 

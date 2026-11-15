@@ -1,4 +1,4 @@
-// Palisade Arena — an original third-person arena duel.
+// Medieval Arena — an original third-person arena duel.
 // All geometry, textures and sounds are generated procedurally at runtime.
 import * as THREE from 'three';
 
@@ -125,7 +125,7 @@ const woodTex = canvasTex(256, (g, s) => {
 const logMat = std(0xffffff, 0.92); logMat.map = woodTex;
 const darkWood = std(0x6b4a30, 0.9); darkWood.map = woodTex;
 
-(function buildPalisade() {
+(function buildWall() {
   const R = 18.6, N = 124, GATE = 0.13;
   const pts = [];
   for (let i = 0; i < N; i++) {
