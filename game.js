@@ -795,45 +795,48 @@ const Music = (() => {
   const SF = 'https://gleitz.github.io/midi-js-soundfonts/FluidR3_GM/';
   // name: [soundfont file, lowest midi, highest midi] — only notes the score uses get decoded
   const INST = {
-    strings: ['string_ensemble_1', 36, 84], harp: ['orchestral_harp', 38, 86], lute: ['acoustic_guitar_nylon', 40, 79],
-    pizz: ['pizzicato_strings', 28, 62], drum: ['taiko_drum', 36, 52], timp: ['timpani', 33, 52],
-    horn: ['french_horn', 45, 77], trumpet: ['trumpet', 55, 84], recorder: ['recorder', 60, 96], tom: ['melodic_tom', 45, 60],
+    strings: ['string_ensemble_1', 28, 84], choir: ['choir_aahs', 48, 76], harp: ['orchestral_harp', 38, 86],
+    lute: ['acoustic_guitar_nylon', 40, 79], pizz: ['pizzicato_strings', 26, 55], drum: ['taiko_drum', 33, 45],
+    timp: ['timpani', 31, 45], horn: ['french_horn', 38, 70], recorder: ['recorder', 57, 82], bell: ['tubular_bells', 60, 72],
   };
-  const ORDER = ['strings', 'harp', 'drum', 'lute', 'timp', 'pizz', 'horn', 'recorder', 'trumpet', 'tom'];
+  const ORDER = ['strings', 'choir', 'harp', 'recorder', 'drum', 'lute', 'timp', 'horn', 'pizz', 'bell'];
   const NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
   const noteName = n => NAMES[n % 12] + (Math.floor(n / 12) - 1);
   let ctx, out, layers = {}, nextT = 0, step = 0, on = true, vol = 0.8, intensity = -1, ducked = false;
   const banks = {}; // inst -> Map(midi -> AudioBuffer)
-  const BPM = 100, S16 = 60 / BPM / 4, LOOP = 256;
-  const CH = { Dm: [50, 57, 62, 65], Bb: [46, 58, 62, 65], C: [48, 55, 64, 67], Am: [45, 57, 60, 64], Gm: [43, 55, 62, 67], A: [45, 57, 61, 64], F: [41, 57, 60, 65] };
-  const PROG = [['Dm', 'Bb', 'C', 'Am', 'Dm', 'Gm', 'A', 'A'], ['F', 'C', 'Dm', 'Bb', 'Gm', 'Dm', 'A', 'A']];
+  // Slow, dark and modal: D minor with Phrygian E-flat colour, long drones, sparse plucked voices.
+  const BPM = 62, S16 = 60 / BPM / 4, LOOP = 256;
+  const CH = {
+    Dm: [38, 50, 57, 62, 65], Eb: [39, 51, 58, 63, 67], A: [33, 45, 57, 61, 64], Asus: [33, 45, 57, 62, 64],
+    Gm: [31, 43, 58, 62, 67], Bb: [34, 46, 58, 62, 65],
+  };
+  const PROG = [['Dm', 'Dm', 'Eb', 'Dm', 'Gm', 'Eb', 'A', 'A'], ['Gm', 'Gm', 'Bb', 'Eb', 'Dm', 'Gm', 'Asus', 'A']];
+  // [beat, beats, midi] per bar — long, falling phrases
   const MEL = [[
-    [[0, 1.5, 62], [1.5, 0.5, 65], [2, 2, 69]],
-    [[0, 1, 70], [1, 1, 69], [2, 1, 67], [3, 1, 65]],
-    [[0, 1.5, 67], [1.5, 0.5, 64], [2, 2, 72]],
-    [[0, 3, 69], [3, 1, 67]],
-    [[0, 1.5, 65], [1.5, 0.5, 67], [2, 1, 69], [3, 1, 74]],
-    [[0, 2, 74], [2, 1, 72], [3, 1, 70]],
-    [[0, 1, 69], [1, 1, 73], [2, 2, 76]],
-    [[0, 4, 69]],
+    [[0, 2, 69], [2, 2, 65]],
+    [[0, 3, 62], [3, 1, 64]],
+    [[0, 2, 65], [2, 1, 63], [3, 1, 62]],
+    [[0, 4, 62]],
+    [[0, 2, 67], [2, 2, 70]],
+    [[0, 2, 67], [2, 2, 63]],
+    [[0, 2, 64], [2, 2, 61]],
+    [[0, 4, 62]],
   ], [
-    [[0, 2, 72], [2, 1, 69], [3, 1, 72]],
-    [[0, 2, 76], [2, 2, 72]],
-    [[0, 1.5, 74], [1.5, 0.5, 72], [2, 1, 69], [3, 1, 65]],
-    [[0, 3, 70], [3, 1, 74]],
-    [[0, 1.5, 74], [1.5, 0.5, 72], [2, 2, 70]],
-    [[0, 1, 69], [1, 1, 65], [2, 2, 62]],
-    [[0, 1.5, 64], [1.5, 0.5, 67], [2, 2, 73]],
-    [[0, 2, 76], [2, 2, 69]],
+    [[0, 4, 62]],
+    [[0, 2, 67], [2, 1, 65], [3, 1, 63]],
+    [[0, 3, 65], [3, 1, 62]],
+    [[0, 4, 63]],
+    [[0, 2, 62], [2, 2, 69]],
+    [[0, 2, 70], [2, 2, 67]],
+    [[0, 4, 64]],
+    [[0, 2, 61], [2, 2, 57]],
   ]];
-  const OST = [0, 0, 12, 0, 0, 7, 12, 0];
-  const HARP = [0, 1, 2, 3, 4, 3, 2, 1]; // index into a 2-octave chord arpeggio
-  const LUTE = [1, 0, 1, 1, 0, 1, 1, 0]; // 8th-note strum rhythm
-  const DRUM = [[0, 1], [3, 0.5], [6, 0.7], [8, 1], [11, 0.5], [12, 0.6], [14, 0.8]]; // [16th, vel]
+  const HARP_STEPS = [0, 6, 10]; // a slow, broken chord each bar
+  const SUSTAIN = new Set(['strings', 'choir', 'horn', 'recorder']);
 
   function impulse() {
-    const len = ctx.sampleRate * 2.6, b = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    const len = ctx.sampleRate * 5, b = ctx.createBuffer(2, len, ctx.sampleRate); // long, cavernous tail
+    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.4); }
     return b;
   }
   async function loadInst(key) {
@@ -866,8 +869,8 @@ const Music = (() => {
     if (ctx) return;
     ctx = c; out = ctx.createGain(); out.gain.value = vol; out.connect(dest);
     const rev = ctx.createConvolver(); rev.buffer = impulse();
-    const wet = ctx.createGain(); wet.gain.value = 0.35; rev.connect(wet).connect(out);
-    for (const [k, send] of [['strings', 0.6], ['harp', 0.5], ['lute', 0.3], ['low', 0.25], ['brass', 0.45], ['calm', 0.5], ['perc', 0.35]]) {
+    const wet = ctx.createGain(); wet.gain.value = 0.6; rev.connect(wet).connect(out);
+    for (const [k, send] of [['strings', 0.7], ['choir', 0.9], ['harp', 0.8], ['lute', 0.6], ['low', 0.4], ['brass', 0.6], ['calm', 0.8], ['perc', 0.5]]) {
       const g = ctx.createGain(); g.gain.value = 0; g.connect(out);
       const s = ctx.createGain(); s.gain.value = send; g.connect(s).connect(rev);
       layers[k] = g;
@@ -881,50 +884,48 @@ const Music = (() => {
     const bank = banks[inst]; if (!bank || !bank.size) return;
     let buf = bank.get(n), sn = n;
     if (!buf) { let best = 1e9; for (const [k, b] of bank) if (Math.abs(k - n) < best) { best = Math.abs(k - n); buf = b; sn = k; } }
-    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = Math.pow(2, (n - sn) / 12);
-    const g = ctx.createGain(), end = t + Math.min(dur, buf.duration);
+    const rate = Math.pow(2, (n - sn) / 12);
+    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    // sustained instruments loop the steady middle of the sample so long drones never run out
+    const sustain = SUSTAIN.has(inst) && dur > (buf.duration - 0.5) / rate;
+    if (sustain) { src.loop = true; src.loopStart = 0.9; src.loopEnd = buf.duration - 0.35; }
+    const g = ctx.createGain(), end = t + (sustain ? dur : Math.min(dur, buf.duration / rate));
     g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vel, t + attack);
     g.gain.setValueAtTime(vel, end); g.gain.exponentialRampToValueAtTime(0.0001, end + release);
     src.connect(g).connect(layers[layer]); src.start(t); src.stop(end + release + 0.05);
   }
   function schedule(s, t) {
     const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
-    const ch = CH[PROG[sec][bi]], barLen = 16 * S16, up = ch.slice(1);
-    // strings: sustained chord + bass
+    const ch = CH[PROG[sec][bi]], barLen = 16 * S16, up = ch.slice(2);
     if (p === 0) {
-      for (const n of up) play('strings', 'strings', n + 12, t, barLen, 0.22, 0.9, 0.25);
-      play('strings', 'strings', ch[0], t, barLen, 0.3, 0.9, 0.2);
+      // low drone: root + fifth in the basses, always present
+      play('strings', 'strings', ch[0], t, barLen + 0.4, 0.34, 1.6, 0.9);
+      play('strings', 'strings', ch[1], t, barLen + 0.4, 0.22, 1.6, 0.9);
+      // upper strings and choir swell in slowly
+      for (const n of up) play('strings', 'strings', n, t + 0.1, barLen, 0.13, 1.8, 1.4);
+      for (const n of up.slice(0, 2)) play('choir', 'choir', n, t + 0.3, barLen, 0.16, 1.8, 1.6);
+      if (bi === 0) play('bell', 'harp', sec ? 62 : 69, t, 4, 0.16, 3); // a distant bell at each phrase
     }
-    // harp arpeggio, 16ths, rolling over two octaves
-    {
-      const arp = [ch[0] + 12, ...up.map(n => n + 12), ch[0] + 24];
-      const idx = HARP[(p % 8)] + (p >= 8 ? 1 : 0);
-      if (sec === 0 || p % 2 === 0) play('harp', 'harp', arp[Math.min(arp.length - 1, idx)], t, 1.2, 0.5, 0.6);
-    }
-    // lute: strummed chords, 8ths
-    if (p % 2 === 0 && LUTE[p / 2]) {
-      const strum = sec === 1 ? 1 : 0.6;
-      [ch[0] + 12, ...up].forEach((n, i) => play('lute', 'lute', n, t + i * 0.018, S16 * 2.2, 0.32 * strum * (p % 8 === 0 ? 1.2 : 1), 0.15));
-    }
-    // pizzicato ostinato
-    if (p % 2 === 0) play('pizz', 'low', ch[0] - 12 + OST[p / 2], t, S16 * 2, 0.55, 0.1);
-    // melody: horn in A, trumpet + horn in B; recorder carries it when things are calm
+    // sparse harp: a slow broken chord, high and quiet
+    const hi = HARP_STEPS.indexOf(p);
+    if (hi >= 0) play('harp', 'harp', [ch[1] + 12, up[0] + 12, up[1] + 12][hi], t, 3, 0.32, 2.2);
+    // a lone lute plucking in the gaps
+    if ((bi % 2 === 1 && p === 8) || (bi === 3 && p === 12)) play('lute', 'lute', up[2] - 12, t, 2.5, 0.3, 1.2);
+    // slow melody: recorder alone when calm, low horns join it in a fight
     for (const [beat, len, n] of MEL[sec][bi]) {
       if (beat * 4 !== p) continue;
-      const d = len * 4 * S16 * 0.95;
-      if (sec === 0) play('horn', 'brass', n, t, d, 0.5, 0.35, 0.04);
-      else { play('trumpet', 'brass', n, t, d, 0.38, 0.3, 0.02); play('horn', 'brass', n - 12, t, d, 0.4, 0.35, 0.04); }
-      play('recorder', 'calm', n + 12, t, d, 0.3, 0.25, 0.03);
+      const d = len * 4 * S16 * 0.97;
+      play('recorder', 'calm', n, t, d, 0.26, 0.9, 0.18);
+      play('horn', 'brass', n - 12, t, d, 0.38, 1.0, 0.25);
     }
-    if (sec === 1 && p === 0) for (const n of up) play('horn', 'brass', n, t, barLen * 0.9, 0.18, 0.4, 0.15);
-    // war drums
-    for (const [q, v] of DRUM) if (q === p) play('drum', 'perc', 38, t, 1.5, 0.75 * v, 0.4);
-    if (sec === 1 && (p === 4 || p === 12)) play('tom', 'perc', 52, t, 0.6, 0.45, 0.2);
-    if (bi === 7 && p >= 8) play('tom', 'perc', 50 + (p - 8), t, 0.4, 0.2 + (p - 8) * 0.05, 0.2);
-    // timpani
-    let tn = ch[0]; while (tn > 45) tn -= 12; while (tn < 36) tn += 12;
-    if (bi === 7) play('timp', 'perc', 45, t, 0.8, 0.25 + (p / 16) * 0.5, 0.3);
-    else if (p === 0) play('timp', 'perc', tn, t, 2, 0.7, 0.6);
+    // fight layers: low horn swells, a heavy pulse, and a heartbeat on the war drums
+    if (p === 0) play('horn', 'brass', ch[1], t, barLen, 0.22, 1.4, 1.0);
+    if (p % 4 === 0) play('pizz', 'low', ch[0] + (p === 8 ? 7 : 0), t, S16 * 3, 0.42, 0.4);
+    if (p === 0) play('drum', 'perc', 36, t, 2, 0.8, 1.0);
+    if (p === 3) play('drum', 'perc', 36, t, 2, 0.5, 1.0);
+    if (p === 10 && bi % 2 === 1) play('drum', 'perc', 33, t, 2, 0.45, 1.0);
+    if (bi === 7) { if (p % 2 === 0) play('timp', 'perc', 33, t, 1.2, 0.15 + (p / 16) * 0.45, 0.6); }
+    else if (p === 0 && bi % 2 === 0) play('timp', 'perc', ch[0], t, 3, 0.55, 1.2);
   }
   function tick() {
     if (!ctx || ctx.state !== 'running') return;
@@ -934,7 +935,7 @@ const Music = (() => {
   function setIntensity(x) {
     if (!ctx || Math.abs(x - intensity) < 0.01) return;
     intensity = x;
-    const lv = { strings: 0.9, harp: 0.9 - 0.45 * x, lute: 0.35 + 0.5 * x, low: x, brass: 0.15 + 0.85 * x, calm: Math.max(0, 0.8 - x), perc: x };
+    const lv = { strings: 0.9, choir: 0.75 - 0.2 * x, harp: 0.8 - 0.35 * x, lute: 0.7 - 0.3 * x, low: 0.8 * x, brass: 0.9 * x, calm: 0.85 - 0.35 * x, perc: 0.9 * x };
     for (const k in lv) layers[k].gain.setTargetAtTime(lv[k], ctx.currentTime, 1.2);
   }
   const apply = () => ctx && out.gain.setTargetAtTime(on ? vol * (ducked ? 0.4 : 1) : 0, ctx.currentTime, 0.15);
