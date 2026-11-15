@@ -114,41 +114,60 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.Shad
 }));
 scene.add(sky);
 
-// ---- the barrier: a vast dome of force over the town, mostly invisible — a faint lattice that pulses,
-// glows where it meets the land, and crackles with arcs of lightning that send ripples across it
+// ---- the barrier: a vast dome of force over the town, mostly invisible — a living, veined membrane that streams
+// and breathes, glows where it meets the land, and crackles with arcs of lightning that send ripples across it
 const barrier = (() => {
   const R = 150, HITS = 6;
-  const geo = new THREE.IcosahedronGeometry(R, 16); // non-indexed: every triangle has its own three corners
-  const n = geo.attributes.position.count, bary = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) bary[i * 3 + (i % 3)] = 1;
-  geo.setAttribute('bary', new THREE.BufferAttribute(bary, 3));
+  const geo = new THREE.SphereGeometry(R, 128, 64);
   const hits = Array.from({ length: HITS }, () => new THREE.Vector4(0, 1, 0, 99));
+  // A living membrane rather than a grid: warped, drifting noise grows branching veins and soft cells,
+  // light pulses stream along the veins, the whole skin slowly breathes, and it only shows in drifting patches.
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
     uniforms: { time: { value: 0 }, hits: { value: hits } },
-    vertexShader: `attribute vec3 bary; varying vec3 vB; varying vec3 vN;
-      void main(){ vB = bary; vN = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `varying vec3 vB; varying vec3 vN; uniform float time; uniform vec4 hits[${HITS}];
-      float hash(vec3 p){ return fract(sin(dot(p, vec3(127.1,311.7,74.7))) * 43758.5453); }
+    vertexShader: `varying vec3 vN; void main(){ vN = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `varying vec3 vN; uniform float time; uniform vec4 hits[${HITS}];
+      float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      vec3 hash3(vec3 p){ return vec3(hash(p), hash(p + 31.7), hash(p + 71.3)); }
+      float noise(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+                   mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+      float fbm(vec3 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return v; }
+      // soft cell walls: distance to the nearest two jittered seeds (smooth, like a membrane of cells)
+      float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
+        for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+          vec3 g = vec3(x, y, z), o = hash3(i + g); o = 0.5 + 0.4 * sin(t * 0.4 + 6.2831 * o);
+          float d = length(g + o - f); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
+        return d2 - d1; }
       void main(){
-        vec3 n = normalize(vN);
-        float e = min(min(vB.x, vB.y), vB.z);
-        float line = 1.0 - smoothstep(0.0, fwidth(e) * 1.6, e);
-        float node = smoothstep(0.93, 1.0, max(max(vB.x, vB.y), vB.z));
-        float base = exp(-max(n.y, 0.0) * 9.0);                                        // a curtain of light where it meets the land
-        float wave = pow(0.5 + 0.5 * sin(n.y * 11.0 - time * 0.9 + sin(atan(n.z, n.x) * 3.0) * 1.2), 60.0); // slow pulses climbing the dome
-        float sweep = pow(0.5 + 0.5 * sin(dot(n, normalize(vec3(sin(time*0.07), 0.3, cos(time*0.07)))) * 5.0 - time * 0.6), 90.0);
-        float cell = floor(hash(floor(n * 25.0) + floor(time * 5.0)) * 1.02);           // cells that stutter on and off
-        float I = line * (0.004 + base * 0.25 + wave * 0.12 + sweep * 0.2 + cell * 0.15) + node * (0.006 + wave * 0.12 + sweep * 0.2) + base * 0.03;
+        vec3 n = normalize(vN); float t = time;
+        vec3 p = n * 4.0;
+        // domain warp that slowly evolves → everything streams and curls
+        vec3 w = vec3(fbm(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
+        vec3 q = p + (w - 0.5) * 3.2;
+        // branching veins: ridges of two noise octaves, thin and bright where they cross
+        float v1 = 1.0 - abs(noise(q * 1.6) * 2.0 - 1.0);
+        float v2 = 1.0 - abs(noise(q * 3.4 + 4.0) * 2.0 - 1.0);
+        float veins = pow(v1, 14.0) + pow(v2, 22.0) * 0.55 * smoothstep(0.6, 1.0, v1 + 0.4);
+        // light pulsing along the veins, like blood or sap moving through them
+        float flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(dot(q, vec3(1.3, 2.1, 0.7)) * 2.2 - t * 1.6), 3.0);
+        float memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35;      // faint walls of the cells
+        float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
+        float veil = smoothstep(0.42, 0.75, fbm(p * 0.45 + vec3(t * 0.012, -t * 0.02, 0.0))); // where the skin shows at all
+        float base = exp(-max(n.y, 0.0) * 8.0);                              // thickest where it sinks into the land
+        float vis = 0.025 + veil * 0.42 + base * 0.55;
+        float I = (veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe;
         for (int i = 0; i < ${HITS}; i++) {
           float age = hits[i].w; if (age > 3.0) continue;
-          float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0));
-          float ring = exp(-pow((d - age * 0.35) * 30.0, 2.0)) * exp(-age * 1.6);
-          float core = exp(-d * 30.0) * exp(-age * 5.0);
-          I += ring * (line * 1.6 + node + 0.15) + core * (0.6 + line * 2.0);
+          float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0)) + (w.y - 0.5) * 0.04; // wobbly, not a perfect circle
+          float ring = exp(-pow((d - age * 0.3) * 22.0, 2.0)) * exp(-age * 1.5);
+          float lit = exp(-d * 9.0) * exp(-age * 1.2);                                 // veins near the strike light up
+          float core = exp(-d * 28.0) * exp(-age * 5.0);
+          I += ring * (0.12 + veins * 1.8 + memb * 1.5) + lit * (veins * 2.2 + memb) + core * 0.8;
         }
         I *= smoothstep(-0.03, 0.02, n.y);
-        gl_FragColor = vec4(vec3(0.42, 0.68, 1.0) * I + vec3(0.6, 0.5, 1.0) * I * I * 0.4, 1.0);
+        vec3 col = mix(vec3(0.35, 0.62, 1.0), vec3(0.62, 0.42, 1.0), smoothstep(0.35, 0.65, w.z)); // drifts between cyan and violet
+        gl_FragColor = vec4(col * I + vec3(0.85, 0.9, 1.0) * I * I * 0.35, 1.0);
       }`,
   });
   const dome = new THREE.Mesh(geo, mat); dome.frustumCulled = false; dome.renderOrder = -1; scene.add(dome);
@@ -181,7 +200,7 @@ const barrier = (() => {
     const theta = rand(0, Math.PI * 2), y = Math.random() < 0.4 ? rand(0.03, 0.2) : rand(0.2, 0.9);
     const start = new V3(Math.cos(theta) * Math.sqrt(1 - y * y), y, Math.sin(theta) * Math.sqrt(1 - y * y));
     const dir = tmp.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).addScaledVector(start, -tmp.dot(start)).normalize().clone();
-    const segs = []; walk(segs, start, dir, rand(18, 45) | 0, 0.9);
+    const segs = []; walk(segs, start, dir, rand(22, 50) | 0, 0.55); // curling, root-like tendrils of lightning
     t1.crossVectors(start, dir).normalize(); t2.copy(dir);
     a.layers.forEach((l, k) => {
       const off = k === 0 ? 0 : (k === 1 ? 0.35 : -0.35), arr = l.geometry.attributes.position.array;

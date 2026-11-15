@@ -1,6 +1,6 @@
 # Medieval Arena
 
-An original third-person arena duel that runs in the browser. You fight a Thornbeak, a thorn-backed flightless bird-beast, in a stockade of logs and stone under a brooding, cloud-heavy sky. High overhead, a vast dome-shaped force barrier covers the town: mostly invisible, it shows as faint pulses of a lattice, a glow along the horizon, and arcs of lightning that crackle across it and send ripples through it. Around it is a medieval town of timber-framed houses, a bell tower, a city wall and a castle on a hill.
+An original third-person arena duel that runs in the browser. You fight a Thornbeak, a thorn-backed flightless bird-beast, in a stockade of logs and stone under a brooding, cloud-heavy sky. High overhead, a vast dome-shaped force barrier covers the town: mostly invisible, it shows as drifting patches of glowing, branching veins that stream and breathe like a living membrane, a glow along the horizon, and arcs of lightning that crackle across it and send ripples through it. Around it is a medieval town of timber-framed houses, a bell tower, a city wall and a castle on a hill.
 
 **Play:** https://str3aml1n3.github.io/medieval-arena/
 
