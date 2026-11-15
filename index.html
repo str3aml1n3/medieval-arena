@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Palisade Arena</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --gold:#d9b46a; --ink:#eadfc8; --blood:#a3221a; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#140d0d; color:var(--ink); font-family:'Cinzel',Georgia,serif; }
+  canvas { display:block; }
+  #hud { position:fixed; inset:0; pointer-events:none; user-select:none; }
+  .bar { position:absolute; height:14px; background:rgba(10,6,4,.65); border:1px solid rgba(217,180,106,.55); box-shadow:0 0 0 2px rgba(0,0,0,.45); }
+  .bar .fill { height:100%; width:100%; transform-origin:left center; }
+  .bar .ghost { position:absolute; inset:0; transform-origin:left center; background:rgba(255,220,180,.35); }
+  #php { left:24px; top:22px; width:280px; }
+  #php .fill { background:linear-gradient(#d4473a,#7b130b); position:relative; }
+  #pst { left:24px; top:44px; width:210px; height:7px; }
+  #pst .fill { background:linear-gradient(#e0cc78,#86742a); }
+  #ebox { position:absolute; left:50%; top:18px; transform:translateX(-50%); width:380px; opacity:0; transition:opacity .3s; }
+  #ebox .bar { position:relative; width:100%; }
+  #ebar .fill { background:linear-gradient(#b8582c,#5e1d0a); position:relative; }
+  #ename { text-align:center; font-size:13px; letter-spacing:.25em; margin-top:6px; text-shadow:0 2px 2px #000; color:var(--gold); }
+  #round { position:absolute; right:26px; top:20px; font-size:18px; letter-spacing:.2em; color:var(--gold); text-shadow:0 2px 3px #000; }
+  #combo { position:absolute; right:40px; top:44%; text-align:right; text-shadow:0 2px 3px #000; }
+  #combo .n { font-size:42px; font-weight:700; color:#ffdca0; }
+  #combo .t { font-size:14px; letter-spacing:.2em; color:var(--gold); }
+  #msg { position:absolute; left:50%; top:30%; transform:translate(-50%,-50%); font-size:46px; font-weight:700; letter-spacing:.18em; color:#f1dcb0; text-shadow:0 3px 10px #000, 0 0 30px rgba(200,90,30,.5); opacity:0; transition:opacity .4s; white-space:nowrap; }
+  #sub { position:absolute; left:50%; top:calc(30% + 44px); transform:translateX(-50%); font-size:16px; letter-spacing:.2em; opacity:0; transition:opacity .4s; text-shadow:0 2px 4px #000; }
+  #help { position:absolute; left:24px; bottom:20px; font-family:Georgia,serif; font-size:12.5px; line-height:1.55; color:rgba(234,223,200,.82); text-shadow:0 1px 2px #000; background:rgba(0,0,0,.28); padding:10px 14px; border-left:2px solid rgba(217,180,106,.5); }
+  #help b { color:var(--gold); font-weight:normal; display:inline-block; min-width:88px; }
+  #stance { position:absolute; left:24px; top:58px; font-size:11px; letter-spacing:.2em; color:rgba(234,223,200,.7); text-shadow:0 1px 2px #000; }
+  #vignette { position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 45%, rgba(160,0,0,.7)); opacity:0; }
+  #pops { position:fixed; inset:0; pointer-events:none; overflow:hidden; }
+  .pop { position:absolute; left:0; top:0; font-weight:700; font-size:22px; color:#ffd9a0; text-shadow:0 2px 0 #000, 0 0 8px rgba(0,0,0,.6); will-change:transform,opacity; }
+  .pop.crit { color:#ffb347; font-size:30px; }
+  .pop.player { color:#ff5b4b; }
+  .pop.block { color:#d6e0ea; font-size:18px; }
+  .pop.timing { color:#f6e7a8; font-size:15px; letter-spacing:.2em; }
+  #overlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:radial-gradient(ellipse at center, rgba(20,10,8,.35), rgba(8,4,4,.85)); z-index:5; }
+  #overlay.hidden { display:none; }
+  .panel { text-align:center; max-width:560px; padding:28px 32px; }
+  .panel h1 { font-size:56px; margin:0 0 4px; letter-spacing:.14em; color:#f0d7a4; text-shadow:0 4px 16px #000, 0 0 40px rgba(210,100,40,.35); }
+  .panel .tag { font-size:14px; letter-spacing:.35em; color:var(--gold); margin-bottom:26px; }
+  .panel p { font-family:Georgia,serif; font-size:15px; line-height:1.6; color:rgba(234,223,200,.85); }
+  .panel button { font-family:'Cinzel',serif; font-size:18px; letter-spacing:.25em; padding:12px 34px; margin-top:18px; color:#1a0f08; background:linear-gradient(#e7c57f,#a97c35); border:1px solid #f5dca6; cursor:pointer; box-shadow:0 6px 20px rgba(0,0,0,.6); }
+  .panel button:hover { filter:brightness(1.12); }
+  .keys { display:grid; grid-template-columns:auto auto; gap:4px 18px; text-align:left; margin:16px auto 0; width:max-content; font-family:Georgia,serif; font-size:14px; }
+  .keys span:nth-child(odd) { color:var(--gold); }
+  @media (max-width:700px) { .panel h1 { font-size:34px; } #php { width:180px; } #ebox { width:200px; } #help { display:none; } }
+</style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="vignette"></div>
+<div id="pops"></div>
+<div id="hud">
+  <div class="bar" id="php"><div class="ghost"></div><div class="fill"></div></div>
+  <div class="bar" id="pst"><div class="fill"></div></div>
+  <div id="stance">UNARMED</div>
+  <div id="ebox"><div class="bar" id="ebar"><div class="ghost"></div><div class="fill"></div></div><div id="ename">THORNBEAK</div></div>
+  <div id="round"></div>
+  <div id="combo"><div class="n"></div><div class="t"></div></div>
+  <div id="msg"></div>
+  <div id="sub"></div>
+  <div id="help">
+    <b>W / S</b> forward / back<br>
+    <b>A / D</b> turn (strafe when locked)<br>
+    <b>Q / E</b> strafe &nbsp; <b style="min-width:0">Shift</b> run<br>
+    <b>F</b> draw / sheathe sword<br>
+    <b>LMB / J</b> attack — press again as the blade glints to chain<br>
+    <b>A/D + attack</b> side swings<br>
+    <b>RMB / K</b> parry &nbsp; <b style="min-width:0">Space</b> step back<br>
+    <b>Tab</b> toggle lock-on &nbsp; <b style="min-width:0">H</b> hide help
+  </div>
+</div>
+<div id="overlay">
+  <div class="panel" id="panel">
+    <h1>PALISADE ARENA</h1>
+    <div class="tag">ONE BLADE · ONE BEAST · NO RETREAT</div>
+    <p>A Thornbeak has been driven into the stockade. Draw your sword and learn its rhythm: strike, wait for the glint, strike again. Mash, and the chain breaks.</p>
+    <div class="keys">
+      <span>W A S D</span><span>move &amp; turn</span>
+      <span>Mouse</span><span>look (click to capture)</span>
+      <span>F</span><span>draw sword</span>
+      <span>Left click</span><span>attack / combo</span>
+      <span>Right click</span><span>parry</span>
+      <span>Space</span><span>step back</span>
+    </div>
+    <button id="startBtn">ENTER THE ARENA</button>
+  </div>
+</div>
+<script type="module" src="game.js"></script>
+</body>
+</html>
