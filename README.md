@@ -13,7 +13,7 @@ The town around the arena mixes four kinds of house: timber-framed houses, tall 
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
 ## Combat
-- **Rhythm combos:** attack, then press again while the blade glints to chain up to four strikes (chop, then two cross-cuts, then a heavy overhead). If you press too early the chain breaks.
+- **Rhythm combos:** attack, then press again while the blade glints to chain up to six strikes: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. If you press too early the chain breaks.
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.

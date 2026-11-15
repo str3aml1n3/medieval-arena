@@ -1827,18 +1827,31 @@ const POSE = {
   lrS: pose({ spine: [0.2, -1.05, 0], neck: [0, 0.95, 0], rSh: [-0.35, 0, -1.45], rEl: [-0.1, 0, 0], rHa: [0.0, 0, 0], lSh: [-0.7, 0, 0.5], lEl: [-0.9, 0, 0], lHip: [-0.6, 0, 0.06], lKn: [0.6, 0, 0], rHip: [0.4, 0, -0.06], rKn: [0.3, 0, 0], hy: -0.14 }),
   heavyW: pose({ spine: [-0.42, 0.35, 0], neck: [0.2, -0.3, 0], rSh: [-3.05, 0, -0.3], rEl: [-1.35, 0, 0], rHa: [0.0, 0, 0], lSh: [-2.6, 0, -0.2], lEl: [-1.2, 0, 0], lHip: [-0.4, 0, 0.06], lKn: [0.25, 0, 0], rHip: [0.35, 0, -0.08], rKn: [0.2, 0, 0], hy: 0.02 }),
   heavyS: pose({ spine: [0.75, -0.1, 0], neck: [-0.5, 0, 0], rSh: [-0.95, 0, 0.0], rEl: [-0.05, 0, 0], rHa: [1.25, 0, 0], lSh: [-0.9, 0, -0.3], lEl: [-0.2, 0, 0], lHip: [-0.95, 0, 0.06], lKn: [1.15, 0, 0], rHip: [0.6, 0, -0.08], rKn: [0.5, 0, 0], hy: -0.3 }),
+  // weaving cut: down across to the left, the wrist rolls the blade over high on the left, then down across to the right
+  waveW: pose({ spine: [-0.1, -0.95, 0], neck: [0.05, 0.85, 0], rSh: [-1.9, 0, -0.9], rEl: [-1.0, 0, 0], rHa: [0.2, 0, 0], lSh: [-0.7, 0, 0.5], lEl: [-1.0, 0, 0], lHip: [-0.3, 0, 0.06], lKn: [0.35, 0, 0], rHip: [0.3, 0, -0.06], rKn: [0.35, 0, 0], hy: -0.04 }),
+  wave1: pose({ spine: [0.3, 0.7, 0], neck: [-0.15, -0.6, 0], rSh: [-0.45, 0, -0.5], rEl: [-0.15, 0, 0], rHa: [0.85, 0, 0], lSh: [0.1, 0, 0.55], lEl: [-0.5, 0, 0], lHip: [-0.55, 0, 0.06], lKn: [0.6, 0, 0], rHip: [0.4, 0, -0.06], rKn: [0.3, 0, 0], hy: -0.13 }),
+  waveM: pose({ spine: [-0.05, 0.95, 0], neck: [0.05, -0.85, 0], rSh: [-2.0, 0, 0.45], rEl: [-1.3, 0, 0], rHa: [0.25, 0, 0], lSh: [-0.3, 0, 0.45], lEl: [-0.7, 0, 0], lHip: [-0.4, 0, 0.06], lKn: [0.45, 0, 0], rHip: [0.35, 0, -0.06], rKn: [0.35, 0, 0], hy: -0.07 }),
+  wave2: pose({ spine: [0.32, -0.95, 0], neck: [-0.15, 0.85, 0], rSh: [-0.5, 0, -1.35], rEl: [-0.1, 0, 0], rHa: [0.8, 0, 0], lSh: [-0.6, 0, 0.5], lEl: [-0.9, 0, 0], lHip: [-0.65, 0, 0.06], lKn: [0.7, 0, 0], rHip: [0.42, 0, -0.06], rKn: [0.3, 0, 0], hy: -0.16 }),
+  // turn-around strike: coil, whip the whole body through a full turn with the blade flung out level, land the cut
+  spinW: pose({ spine: [0.15, 0.85, 0], neck: [0, -0.5, 0], rSh: [-0.9, 0, 0.7], rEl: [-1.5, 0, 0], rHa: [0.3, 0, 0], lSh: [-0.3, 0, 0.6], lEl: [-0.8, 0, 0], lHip: [-0.5, 0, 0.1], lKn: [0.75, 0, 0], rHip: [0.3, 0, -0.1], rKn: [0.7, 0, 0], hy: -0.2 }),
+  spinA: pose({ spine: [0.1, -0.35, 0], neck: [0, 0.3, 0], rSh: [-0.15, 0, -1.5], rEl: [-0.08, 0, 0], rHa: [0.05, 0, 0], lSh: [-0.2, 0, 1.1], lEl: [-0.5, 0, 0], lHip: [-0.35, 0, 0.14], lKn: [0.55, 0, 0], rHip: [0.25, 0, -0.14], rKn: [0.5, 0, 0], hy: -0.14 }),
+  spinS: pose({ spine: [0.28, -1.1, 0], neck: [-0.1, 0.95, 0], rSh: [-0.4, 0, -1.45], rEl: [-0.05, 0, 0], rHa: [0.3, 0, 0], lSh: [-0.7, 0, 0.5], lEl: [-0.9, 0, 0], lHip: [-0.75, 0, 0.08], lKn: [0.85, 0, 0], rHip: [0.45, 0, -0.08], rKn: [0.4, 0, 0], hy: -0.2 }),
   block: pose({ spine: [0.12, 0.15, 0], neck: [-0.05, -0.15, 0], rSh: [-1.25, 0, 0.25], rEl: [-1.25, 0, 0], rHa: [0.65, 1.35, 0], lSh: [-1.0, 0, 0.1], lEl: [-1.4, 0, 0], lHip: [-0.42, 0, 0.06], lKn: [0.55, 0, 0], rHip: [0.32, 0, -0.08], rKn: [0.45, 0, 0], hy: -0.1 }),
   hurt: pose({ spine: [-0.45, 0, 0.15], neck: [-0.4, 0, 0], rSh: [-0.2, 0, -0.6], rEl: [-0.6, 0, 0], lSh: [-0.1, 0, 0.7], lEl: [-0.4, 0, 0], lHip: [0.2, 0, 0], lKn: [0.4, 0, 0], rHip: [-0.3, 0, 0], rKn: [0.5, 0, 0], hy: -0.08 }),
   dodge: pose({ spine: [0.32, 0, 0], neck: [-0.25, 0, 0], rSh: [-0.4, 0, -0.5], rEl: [-0.9, 0, 0], lSh: [-0.3, 0, 0.6], lEl: [-0.8, 0, 0], lHip: [-0.9, 0, 0], lKn: [1.2, 0, 0], rHip: [-0.35, 0, 0], rKn: [1.0, 0, 0], hy: -0.22 }),
   dead: pose({ spine: [-0.2, 0, 0], neck: [-0.5, 0.4, 0], rSh: [-2.6, 0, -0.6], rEl: [-0.2, 0, 0], lSh: [-2.4, 0, 0.7], lEl: [-0.3, 0, 0], lHip: [-0.2, 0, 0.1], rHip: [-0.1, 0, -0.15], lKn: [0.2, 0, 0], rKn: [0.3, 0, 0] }),
 };
+// seq: the poses the strike passes through. cuts: which of those segments can wound (the weaving cut lands twice).
 const SWINGS = {
-  chop: { w: 'chopW', s: 'chopS', arc: 0.6, dmg: 1.0, lunge: 1.5 },
-  rl: { w: 'rlW', s: 'rlS', arc: 1.2, dmg: 0.9, lunge: 1.0 },
-  lr: { w: 'lrW', s: 'lrS', arc: 1.2, dmg: 0.95, lunge: 1.0 },
-  heavy: { w: 'heavyW', s: 'heavyS', arc: 0.7, dmg: 1.75, lunge: 2.6, slow: 1.3 },
+  chop: { w: 'chopW', seq: ['chopS'], arc: 0.6, dmg: 1.0, lunge: 1.5 },
+  rl: { w: 'rlW', seq: ['rlS'], arc: 1.2, dmg: 0.9, lunge: 1.0 },
+  lr: { w: 'lrW', seq: ['lrS'], arc: 1.2, dmg: 0.95, lunge: 1.0 },
+  wave: { w: 'waveW', seq: ['wave1', 'waveM', 'wave2'], cuts: [0, 2], arc: 1.25, dmg: 0.7, lunge: 0.9, aMul: 2.7, slow: 1.05 },
+  spin: { w: 'spinW', seq: ['spinA', 'spinS'], cuts: [0, 1], once: true, arc: 3.3, dmg: 1.4, lunge: 1.2, aMul: 2.3, wMul: 1.15, spin: true },
+  heavy: { w: 'heavyW', seq: ['heavyS'], arc: 0.7, dmg: 1.75, lunge: 2.6, slow: 1.3 },
 };
-const COMBO = ['chop', 'rl', 'lr', 'heavy'];
+const COMBO = ['chop', 'rl', 'lr', 'wave', 'spin', 'heavy'];
+const easeIn = t => t * t, easeOut = t => 1 - (1 - t) * (1 - t);
 
 const hero = buildHero();
 // Blender-built hero (tools/build_hero.py -> models/hero.glb); swapped in place of the primitive hero at load.
@@ -1893,7 +1906,7 @@ const P = {
   pos: new V3(0, 0, 7), yaw: Math.PI, vel: new V3(), hp: 100, maxHp: 100, st: 100, maxSt: 100,
   drawn: false, state: 'idle', t: 0, step: 0, swing: null, swingType: '', times: null, queued: false, failed: false,
   hitSet: new Set(), iframes: 0, stunDur: 0, gait: 0, lastSg: 1, stDelay: 0, swapDone: false, swungSound: false, dodgeDir: new V3(),
-  combo: 0, comboT: 0, ghostHp: 100,
+  combo: 0, comboT: 0, ghostHp: 100, gaitW: 0, bank: 0, prevYaw: Math.PI, visYaw: 0, seg: -1,
 };
 
 // ============================================================ the Thornbeak (original creature)
@@ -2281,8 +2294,9 @@ function startAttack(step, lf, rt, target) {
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
   P.hitSet.clear();
-  const sp = Math.pow(0.9, step) * (sw.slow || 1);
-  P.times = { w: 0.21 * sp, a: 0.11 * sp, r: 0.42 * sp };
+  const sp = Math.max(0.72, Math.pow(0.93, step)) * (sw.slow || 1);
+  P.times = { w: 0.21 * sp * (sw.wMul || 1), a: 0.11 * sp * (sw.aMul || 1), r: 0.42 * sp };
+  P.seg = -1;
   P.st = Math.max(0, P.st - (7 + step * 2)); P.stDelay = 0.6;
   if (target) P.yaw = dampAng(P.yaw, yawTo(P.pos, target.pos), 30, 0.05);
 }
@@ -2290,6 +2304,7 @@ function startAttack(step, lf, rt, target) {
 // ============================================================ player update
 function updatePlayer(dt) {
   const target = currentTarget();
+  P.visYaw = 0;
   P.iframes = Math.max(0, P.iframes - dt); P.stDelay -= dt;
   P.comboT -= dt; if (P.comboT <= 0) P.combo = 0;
   const fw = keys.KeyW || keys.ArrowUp, bw = keys.KeyS || keys.ArrowDown;
@@ -2350,7 +2365,7 @@ function updatePlayer(dt) {
     case 'attack': {
       P.t += dt;
       const { w, a, r } = P.times, tot = w + a + r, winStart = w + a + 0.02;
-      if (wantAttack && P.step < 3) {
+      if (wantAttack && P.step < COMBO.length - 1) {
         if (P.t >= winStart && !P.failed && P.st >= 4) {
           const late = (P.t - winStart) / (tot - winStart);
           popText(hero.swordTip.getWorldPosition(new V3()), late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
@@ -2365,13 +2380,23 @@ function updatePlayer(dt) {
       let v = 0;
       if (P.t >= w * 0.5 && P.t < w + a) v = P.swing.lunge * 2.6; else if (P.t < w + a + r * 0.3) v = P.swing.lunge * 0.5;
       desired.copy(fwdV).multiplyScalar(v); velK = 20;
-      if (P.t >= w && P.t < w + a + 0.025) checkPlayerHits();
-      const W = POSE[P.swing.w], S = POSE[P.swing.s], base = POSE.stance;
-      if (P.t < w) tp = blend(base, W, ease(P.t / w));
-      else if (P.t < w + a) tp = blend(W, S, ease((P.t - w) / a));
-      else tp = blend(S, base, ease(clamp(((P.t - w - a) / r - 0.3) / 0.7, 0, 1)));
+      const sw = P.swing, seq = sw.seq, W = POSE[sw.w], base = POSE.stance, last = POSE[seq[seq.length - 1]];
+      if (P.t < w) tp = blend(base, W, easeOut(P.t / w));                       // quick wind-up that hangs for an instant
+      else if (P.t < w + a + 0.025) {
+        const u = Math.min(0.9999, (P.t - w) / a) * seq.length, i = Math.floor(u);
+        const cutting = !sw.cuts || sw.cuts.includes(i);
+        if (i !== P.seg) { P.seg = i; if (i > 0 && cutting && !sw.once) { P.hitSet.clear(); SFX.swing(P.step); } } // each cut of a weaving strike can land
+        if (cutting) checkPlayerHits();
+        tp = blend(i ? POSE[seq[i - 1]] : W, POSE[seq[i]], cutting ? easeIn(u - i) : ease(u - i)); // cuts accelerate into the target
+      } else {
+        const x = (P.t - w - a) / r;                                              // follow through past the end of the cut, then recover
+        tp = x < 0.3 ? blend(seq.length > 1 ? POSE[seq[seq.length - 2]] : W, last, 1 + 0.07 * Math.sin(Math.PI * x / 0.3))
+          : blend(last, base, ease(clamp((x - 0.3) / 0.7, 0, 1)));
+      }
+      tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
+      if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
       k = 30;
-      const inWin = P.step < 3 && !P.failed && P.t >= winStart;
+      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
       if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); }
@@ -2398,25 +2423,61 @@ function updatePlayer(dt) {
   }
   if (!tp) tp = P.drawn ? POSE.stance : POSE.relaxed;
 
-  // walk cycle layered on top of the upper-body pose
+  // ---- locomotion, layered on top of the upper-body pose
   P.vel.x = damp(P.vel.x, desired.x, velK, dt); P.vel.z = damp(P.vel.z, desired.z, velK, dt);
   const spd = Math.hypot(P.vel.x, P.vel.z);
-  if (moving && spd > 0.3) {
-    tp = blend(tp, tp, 0);
-    const a = Math.min(1.2, spd / 4.2);
+  tp = blend(tp, tp, 0);
+  P.gaitW = damp(P.gaitW, moving && spd > 0.3 ? 1 : 0, 9, dt); // the cycle eases in and out instead of snapping on
+  const gw = P.gaitW;
+  if (gw > 0.02) {
+    const a = Math.min(1.2, spd / 4.2) * gw, run = clamp((spd - 4) / 2.5, 0, 1) * gw;
     P.gait += dt * (4 + spd * 1.7);
     const s = Math.sin(P.gait), c = Math.cos(P.gait);
-    const fdot = (P.vel.x * fwdV.x + P.vel.z * fwdV.z) / spd;
-    const dir = fdot < -0.3 ? -1 : 1;
-    tp.lHip[0] = tp.lHip[0] * 0.25 - s * 0.7 * a * dir; tp.rHip[0] = tp.rHip[0] * 0.25 + s * 0.7 * a * dir;
-    tp.lKn[0] = 0.12 + Math.max(0, c * dir) * 1.1 * a; tp.rKn[0] = 0.12 + Math.max(0, -c * dir) * 1.1 * a;
-    tp.hy += -Math.abs(c) * 0.05 * a + 0.02 * a;
-    if (!P.drawn && P.state === 'idle') { tp.lSh[0] = s * 0.55 * a; tp.rSh[0] = -s * 0.55 * a; tp.lEl[0] = -0.35; tp.rEl[0] = -0.35; tp.spine[0] += 0.08 * a; }
-    if (P.drawn) tp.spine[0] += 0.05 * a;
+    const fdot = spd > 0.05 ? (P.vel.x * fwdV.x + P.vel.z * fwdV.z) / spd : 1, sdot = spd > 0.05 ? (P.vel.x * rightV.x + P.vel.z * rightV.z) / spd : 0;
+    const dir = fdot < -0.3 ? -1 : 1, fa = Math.max(0.3, Math.abs(fdot));
+    // legs: swing from the hip; the knee folds only on the leg travelling forward and folds deeper at a run
+    tp.lHip[0] = tp.lHip[0] * (1 - 0.75 * gw) - s * 0.7 * a * dir * fa; tp.rHip[0] = tp.rHip[0] * (1 - 0.75 * gw) + s * 0.7 * a * dir * fa;
+    tp.lKn[0] = lerp(tp.lKn[0], 0.12 + Math.max(0, c * dir) * (1.1 + run * 0.5) * a, gw); tp.rKn[0] = lerp(tp.rKn[0], 0.12 + Math.max(0, -c * dir) * (1.1 + run * 0.5) * a, gw);
+    // side-stepping: the legs open and close across the body instead of scissoring forward
+    tp.lHip[2] += s * 0.24 * sdot * a; tp.rHip[2] += s * 0.24 * sdot * a;
+    // pelvis and chest: the hips twist with the stride and dip over the swinging leg, the chest counter-rotates, the head stays level
+    tp.hipR[1] += s * 0.13 * a * dir * fa; tp.hipR[2] += c * 0.03 * a;
+    tp.spine[1] -= s * 0.2 * a * dir * fa; tp.spine[2] -= c * 0.035 * a; tp.neck[1] += s * 0.07 * a * dir * fa; tp.neck[2] += c * 0.02 * a;
+    tp.hy += (-Math.abs(c) * 0.05 + 0.02) * a;
+    tp.spine[0] += (P.drawn ? 0.05 : 0.08) * a + run * 0.13; tp.neck[0] -= run * 0.1;
+    if (P.state === 'idle') {
+      if (!P.drawn) { // free arms swing opposite the legs, elbows folding as each arm comes forward — pumping when running
+        tp.lSh[0] = lerp(tp.lSh[0], s * (0.55 + run * 0.35) * a * dir, gw); tp.rSh[0] = lerp(tp.rSh[0], -s * (0.55 + run * 0.35) * a * dir, gw);
+        tp.lEl[0] = lerp(tp.lEl[0], -0.25 - Math.max(0, -s * dir) * 0.5 * a - run * 0.7, gw); tp.rEl[0] = lerp(tp.rEl[0], -0.25 - Math.max(0, s * dir) * 0.5 * a - run * 0.7, gw);
+      } else { // on guard: the free hand balances the stride and the blade bobs with each step
+        tp.lSh[0] += s * 0.2 * a * dir; tp.lEl[0] -= Math.max(0, -s * dir) * 0.2 * a; tp.rSh[0] -= s * 0.06 * a; tp.rHa[0] += c * 0.06 * a;
+      }
+    }
     const sg = Math.sign(s); if (sg !== P.lastSg) { P.lastSg = sg; SFX.step(false); if (spd > 5) dust(P.pos, 1, 0.2, 0.5); }
   }
-  // breathing
-  tp = blend(tp, tp, 0); tp.spine[0] += Math.sin(time * 2.1) * 0.015;
+  // lean into acceleration and braking, and bank into turns
+  if (P.state === 'idle' || P.state === 'block') tp.spine[0] += clamp(((desired.x - P.vel.x) * fwdV.x + (desired.z - P.vel.z) * fwdV.z) * 0.022, -0.1, 0.14);
+  P.bank = damp(P.bank, clamp(angWrap(P.yaw - P.prevYaw) / Math.max(dt, 1e-3) * 0.045, -0.14, 0.14), 6, dt); P.prevYaw = P.yaw;
+  tp.spine[2] -= P.bank; tp.neck[2] += P.bank * 0.5;
+  // ---- always alive: breathing lifts the chest and shoulders
+  const br = Math.sin(time * 1.9);
+  tp.spine[0] += br * 0.022; tp.neck[0] -= br * 0.014; tp.lSh[2] += br * 0.018; tp.rSh[2] -= br * 0.018; tp.hy += br * 0.004;
+  // ---- standing still: weight drifts from foot to foot, the head looks about, and on guard the blade never quite rests
+  const iw = (1 - gw) * (P.state === 'idle' ? 1 : P.state === 'block' ? 0.4 : 0);
+  if (iw > 0.02) {
+    const ws = Math.sin(time * 0.55 + Math.sin(time * 0.21) * 1.5);
+    tp.hipR[2] += ws * 0.045 * iw; tp.spine[2] -= ws * 0.055 * iw; tp.neck[2] += ws * 0.02 * iw; tp.hy -= Math.abs(ws) * 0.008 * iw;
+    tp.lKn[0] += Math.max(0, ws) * 0.1 * iw; tp.rKn[0] += Math.max(0, -ws) * 0.1 * iw;
+    if (!target) { tp.neck[1] += (Math.sin(time * 0.31) * 0.16 + Math.sin(time * 0.83 + 1) * 0.06) * iw; tp.neck[0] += Math.sin(time * 0.23 + 2) * 0.04 * iw; }
+    if (P.drawn) { // light on his feet, point circling
+      tp.hy += Math.sin(time * 3.2) * 0.01 * iw; tp.lKn[0] += (0.04 + Math.sin(time * 3.2) * 0.03) * iw; tp.rKn[0] += (0.04 + Math.sin(time * 3.2) * 0.03) * iw;
+      tp.rSh[0] += Math.sin(time * 1.7) * 0.035 * iw; tp.rHa[0] += Math.sin(time * 2.3 + 0.5) * 0.06 * iw; tp.rHa[1] += Math.cos(time * 2.3 + 0.5) * 0.05 * iw;
+      tp.lSh[0] += Math.sin(time * 1.3 + 2) * 0.04 * iw; tp.spine[1] += Math.sin(time * 0.9) * 0.025 * iw;
+    } else { // at ease: arms hang and sway, shoulders settle
+      tp.lSh[0] += Math.sin(time * 0.9) * 0.03 * iw; tp.rSh[0] += Math.sin(time * 0.9 + 1.3) * 0.03 * iw;
+      tp.lEl[0] -= (0.04 + Math.sin(time * 0.7 + 0.5) * 0.03) * iw; tp.rEl[0] -= (0.04 + Math.sin(time * 0.7 + 2.1) * 0.03) * iw;
+    }
+  }
   // pain: after a hit he writhes (twisting, doubling over, clutching the wound) and it fades over a second or so;
   // when he dies he thrashes on the ground before going still
   if (P.pain > 0.01) {
@@ -2447,7 +2508,7 @@ function updatePlayer(dt) {
   if (l > ARENA_R) { P.pos.x *= ARENA_R / l; P.pos.z *= ARENA_R / l; }
   hero.root.position.x = P.pos.x; hero.root.position.z = P.pos.z;
   if (P.state !== 'dead') { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
-  hero.root.rotation.y = P.yaw;
+  hero.root.rotation.y = P.yaw + P.visYaw;
   hero.root.updateMatrixWorld(true);
   if (P.state === 'attack') {
     const { w, a } = P.times;
