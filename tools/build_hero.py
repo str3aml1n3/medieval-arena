@@ -374,48 +374,68 @@ for sx in (-1, 1):  # spaulders: a rounded cop cupping the shoulder, two narrow 
         rivet(P, ck + rk @ V(0.0, 0.02, 0.0), r=0.005)
 finalize(P, 'SpineMesh', spine)
 
-# ------------------------------------------------------------------ neck & head: face, beard, nasal helm, mail coif
+# ------------------------------------------------------------------ neck & head: bare-headed — face, shaggy hair, beard, a scar
 P = Part()
-tube(P, [V(0, -0.03, 0.0), V(0, 0.04, 0.005), V(0, 0.11, 0.01)], [(0.07, 0.072), (0.066, 0.068), (0.064, 0.066)], 'Skin', n=16)
+tube(P, [V(0, -0.03, 0.0), V(0, 0.04, 0.004), V(0, 0.11, 0.008)], [(0.078, 0.08), (0.07, 0.073), (0.067, 0.07)], 'Skin', n=20)
+ellipsoid(P, V(0, 0.035, 0.062), (0.016, 0.02, 0.014), 'Skin', seg=10, rings=8, tint=0.97)  # larynx
+for sx in (-1, 1):  # the cords of the neck running up behind the ears
+    tube(P, [V(sx * 0.05, -0.03, 0.035), V(sx * 0.062, 0.04, 0.0), V(sx * 0.066, 0.1, -0.03)], [(0.016, 0.02), (0.015, 0.018), (0.012, 0.014)], 'Skin', n=8, up_hint=V(0, 0, 1))
 finalize(P, 'NeckMesh', neck)
 
 P = Part()
-ellipsoid(P, V(0, 0.1, 0.0), (0.102, 0.122, 0.112), 'Skin', seg=28, rings=18)  # cranium
-ellipsoid(P, V(0, 0.035, 0.035), (0.08, 0.07, 0.088), 'Skin', seg=24, rings=14)  # jaw
-ellipsoid(P, V(0, 0.128, 0.083), (0.086, 0.02, 0.035), 'Skin', seg=18, rings=8, tint=0.92)  # brow ridge
+
+
+def skull(p):  # one continuous head: broad cranium, flatter temples, a jaw that narrows and juts toward the chin
+    t = max(0.0, -p.y / 0.135)
+    x = p.x * (1 - 0.3 * t ** 1.4) * (0.96 if abs(p.y) < 0.04 else 1.0)
+    z = p.z * (1 - 0.12 * t) + 0.03 * t * (1 if p.z > 0 else 0.2) + (0.012 if p.z < 0 and p.y > 0 else 0.0)
+    return V(x, p.y, z)
+
+
+ellipsoid(P, V(0, 0.088, 0.0), (0.1, 0.135, 0.112), 'Skin', seg=40, rings=28, deform=skull)
+ellipsoid(P, V(0, 0.03, 0.04), (0.074, 0.06, 0.082), 'Skin', seg=24, rings=14)  # the mass of the jaw and cheeks
+ellipsoid(P, V(0, 0.128, 0.083), (0.086, 0.019, 0.034), 'Skin', seg=20, rings=8, tint=0.93)  # brow ridge
 for sx in (-1, 1):
     ellipsoid(P, V(sx * 0.054, 0.084, 0.07), (0.024, 0.014, 0.02), 'Skin', seg=12, rings=8, tint=1.02)  # cheekbones
     ellipsoid(P, V(sx * 0.038, 0.106, 0.092), (0.016, 0.011, 0.01), 'Eye', seg=14, rings=10)  # eyeballs, set back in their sockets
     ellipsoid(P, V(sx * 0.036, 0.106, 0.1015), (0.0062, 0.0062, 0.002), 'Hair', seg=10, rings=6)  # iris and pupil
-    ellipsoid(P, V(sx * 0.038, 0.1175, 0.095), (0.019, 0.0045, 0.01), 'Skin', seg=12, rings=6, tint=0.88)  # upper lids
+    ellipsoid(P, V(sx * 0.038, 0.1155, 0.0955), (0.0195, 0.006, 0.0105), 'Skin', seg=12, rings=6, tint=0.88)  # upper lids, a little hooded
     ellipsoid(P, V(sx * 0.038, 0.0955, 0.094), (0.017, 0.003, 0.009), 'Skin', seg=10, rings=6, tint=0.85)  # lower lids / bags
-    ellipsoid(P, V(sx * 0.042, 0.124, 0.1), (0.027, 0.007, 0.012), 'Hair', seg=12, rings=6, rot=Matrix.Rotation(sx * -0.12, 3, 'Z'))  # brows
+    ellipsoid(P, V(sx * 0.042, 0.1255, 0.1), (0.028, 0.0075, 0.012), 'Hair', seg=12, rings=6, rot=Matrix.Rotation(sx * -0.14, 3, 'Z'))  # heavy brows
     ellipsoid(P, V(sx * 0.103, 0.09, -0.005), (0.015, 0.036, 0.026), 'Skin', seg=12, rings=8, tint=0.95)  # ears
     ellipsoid(P, V(sx * 0.108, 0.09, -0.002), (0.006, 0.022, 0.014), 'Skin', seg=8, rings=6, tint=0.8)  # ear folds
     ellipsoid(P, V(sx * 0.013, 0.061, 0.124), (0.01, 0.008, 0.008), 'Skin', seg=8, rings=6, tint=0.92)  # nostril wings
     ellipsoid(P, V(sx * 0.03, 0.05, 0.116), (0.034, 0.011, 0.013), 'Hair', seg=12, rings=6, rot=Matrix.Rotation(sx * 0.4, 3, 'Z'))  # moustache
 tube(P, [V(0, 0.122, 0.104), V(0, 0.095, 0.121), V(0, 0.068, 0.132)], [(0.012, 0.011), (0.016, 0.015), (0.02, 0.016)], 'Skin', n=12, up_hint=V(0, 0, 1), tip=V(0, 0.058, 0.128))  # nose
+ellipsoid(P, V(0.004, 0.098, 0.123), (0.008, 0.007, 0.006), 'Skin', seg=8, rings=6, tint=0.95)  # the bump of an old break
 ellipsoid(P, V(0, 0.034, 0.108), (0.022, 0.007, 0.01), 'Skin', seg=12, rings=6, tint=0.72)  # lower lip
+# an old scar: down through the left brow and across the cheekbone
+scar = [V(0.058, 0.15, 0.093), V(0.054, 0.128, 0.104), V(0.058, 0.1, 0.099), V(0.066, 0.078, 0.088)]
+tube(P, scar, [(0.0028, 0.002), (0.0034, 0.0026), (0.0034, 0.0026), (0.0026, 0.002)], 'Skin', n=6, up_hint=V(0, 0, 1), tint=0.62)
+
+
 def shaggy(p, amt=0.22, sc=60.0):  # coarse hair: the surface frays in fine, downward-combed clumps
     n = noise.noise(V(p.x * sc, p.y * sc * 0.35, p.z * sc))
     return p * (1 + amt * n)
+
+
 ellipsoid(P, V(0, 0.012, 0.062), (0.084, 0.062, 0.072), 'Hair', seg=40, rings=22,
           deform=lambda p: shaggy(V(p.x, p.y * (1.3 if p.y < 0 else 0.55), p.z), 0.12))  # beard
-ellipsoid(P, V(0, 0.085, -0.06), (0.098, 0.065, 0.065), 'Hair', seg=16, rings=10)  # hair at the nape
-# nasal helm: conical dome, brow band, nasal, rivets, crest
-ellipsoid(P, V(0, 0.142, -0.004), (0.118, 0.105, 0.128), 'Steel', seg=36, rings=18,
-          deform=lambda p: V(p.x, p.y * (0.12 if p.y < 0 else 1.0) + (0.02 * (p.y / 0.105) ** 3 if p.y > 0 else 0), p.z))
-torus(P, V(0, 0.142, -0.004), (0.12, 0.13), 0.012, 'Iron', n_around=40, squash=1.4)
-tube(P, [V(0, 0.15, 0.13), V(0, 0.11, 0.134), V(0, 0.072, 0.142)], [(0.013, 0.004), (0.012, 0.004), (0.015, 0.004)], 'Steel', n=8, up_hint=V(0, 0, 1))
-for k in range(12):
-    a = TAU * k / 12
-    rivet(P, V(math.sin(a) * 0.123, 0.142, -0.004 + math.cos(a) * 0.133), r=0.0065)
-tube(P, [V(0, 0.145, 0.125), V(0, 0.22, 0.04), V(0, 0.245, -0.03), V(0, 0.22, -0.11), V(0, 0.145, -0.13)], [(0.01, 0.006)] * 5, 'Iron', n=6, up_hint=V(1, 0, 0))
-# mail coif worn under the helm: it hugs the skull, covers the ears and nape and closes round the throat, framing the face
-ring_mod = lambda i, j, u, a: 1 + 0.004 * math.cos(j * math.pi) * (1 if i % 2 else -1)
-curtain(P, 0.0, 0.14, -0.035, 0.124, 0.098, 0.95, TAU - 0.95, 'Mail', rows=12, cols=48, depth=(1.0, 1.05),
-        mod=lambda i, j, u, a: ring_mod(i, j, u, a) * (1 + 0.07 * math.sin(math.pi * u)), tint=mail_tint, thick=0.005)
-curtain(P, 0.0, 0.03, -0.04, 0.094, 0.098, -1.0, 1.0, 'Mail', rows=4, cols=20, depth=(1.0, 1.1), mod=ring_mod, tint=mail_tint, thick=0.005)  # throat
+
+
+def hair_cap(p):  # hangs to the ears at the sides and back; in front it stops at the hairline, which dips to the temples
+    y = p.y * (0.8 if p.y < 0 else 1.0)
+    if p.z > 0:
+        y = max(y, -0.07 + p.z * 0.9)
+    q = V(p.x, y, p.z)
+    locks = noise.noise(V(q.x * 22.0, q.y * 7.0, q.z * 22.0))  # broad, downward-combed locks
+    return shaggy(q * (1 + 0.07 * locks), 0.06, 55.0)
+
+
+ellipsoid(P, V(0, 0.118, -0.012), (0.109, 0.116, 0.123), 'Hair', seg=48, rings=30, deform=hair_cap)
+ellipsoid(P, V(0, 0.062, -0.066), (0.094, 0.085, 0.058), 'Hair', seg=28, rings=16, deform=lambda p: shaggy(p, 0.11, 50.0))  # thick at the nape
+for sx in (-1, 1):
+    ellipsoid(P, V(sx * 0.089, 0.06, 0.034), (0.009, 0.04, 0.022), 'Hair', seg=10, rings=8, deform=lambda p: shaggy(p, 0.12, 70.0))  # sideburns into the beard
 finalize(P, 'HeadMesh', head)
 
 # ------------------------------------------------------------------ arms: quilted sleeves, couters, vambraces, gauntlets
@@ -587,7 +607,7 @@ if PREVIEW:
     cam = bpy.data.objects.new('Cam', bpy.data.cameras.new('Cam')); scn.collection.objects.link(cam); scn.camera = cam
     scn.render.engine = 'CYCLES'; scn.cycles.samples = 40; scn.cycles.device = 'CPU'
     scn.render.resolution_x, scn.render.resolution_y = 700, 900
-    for name, pos, tgt in (('front3q', (1.6, -2.6, 1.5), (0, 0, 1.05)), ('back3q', (-1.8, 2.4, 1.6), (0, 0, 1.05)), ('face', (0.35, -0.8, 1.8), (0, 0, 1.76)),
+    for name, pos, tgt in (('front3q', (1.6, -2.6, 1.5), (0, 0, 1.05)), ('back3q', (-1.8, 2.4, 1.6), (0, 0, 1.05)), ('face', (0.55, -1.25, 1.88), (0.06, 0, 1.79)), ('faceside', (1.3, -0.25, 1.85), (0.06, 0, 1.79)),
                            ('hands', (0.6, -1.0, 1.2), (-0.2, 0, 1.0))):
         cam.location = pos
         cam.rotation_euler = (Vector(tgt) - Vector(pos)).to_track_quat('-Z', 'Y').to_euler()
