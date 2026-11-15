@@ -1,6 +1,7 @@
 // Medieval Arena — an original third-person arena duel.
 // All geometry, textures and sounds are generated procedurally at runtime.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const V3 = THREE.Vector3;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -12,6 +13,7 @@ const dampAng = (a, b, k, dt) => a + angWrap(b - a) * (1 - Math.exp(-k * dt));
 const ease = t => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 const yawTo = (from, to) => Math.atan2(to.x - from.x, to.z - from.z);
 const ARENA_R = 17.2;
+const STAND_TIERS = [[20.3, 5.0], [21.7, 6.2]];
 
 // ============================================================ renderer / scene
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -20,11 +22,11 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 0.95;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x5a3436, 0.014);
+scene.fog = new THREE.FogExp2(0xb2c3d3, 0.0052);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 400);
 camera.position.set(0, 4, 14);
 
@@ -36,6 +38,10 @@ addEventListener('resize', () => {
 
 function std(color, rough = 0.85, metal = 0, extra = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal, ...extra });
+}
+// physical material — clearcoat / sheen give the cold specular glint under the daylight env map
+function phys(color, rough = 0.5, metal = 0, extra = {}) {
+  return new THREE.MeshPhysicalMaterial({ color, roughness: rough, metalness: metal, ...extra });
 }
 function mesh(geo, mat, parent, pos = [0, 0, 0], rot = [0, 0, 0], scl = null) {
   const m = new THREE.Mesh(geo, mat);
@@ -60,35 +66,51 @@ function canvasTex(size, draw, rep = 1) {
 }
 
 // ============================================================ sky + lights
-const SUN_DIR = new V3(-0.62, 0.16, -0.77).normalize();
+const SUN_DIR = new V3(0.38, 0.8, 0.46).normalize();
 const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 16), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
   uniforms: { sunDir: { value: SUN_DIR } },
   vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `varying vec3 vD; uniform vec3 sunDir;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+    float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
+      return mix(mix(hash(i), hash(i+vec2(1,0)), u.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y); }
+    float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ v += a*noise(p); p *= 2.03; a *= 0.5; } return v; }
     void main(){
-      float h = vD.y;
-      vec3 hor = vec3(0.98,0.50,0.26), mid = vec3(0.45,0.22,0.33), top = vec3(0.06,0.05,0.13);
-      vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
-      c = mix(c, top, smoothstep(0.18, 0.85, h));
-      c = mix(c, vec3(0.24,0.13,0.13), smoothstep(0.0, -0.15, h));
-      float s = max(dot(vD, sunDir), 0.0);
-      c += vec3(1.0,0.62,0.3) * pow(s, 60.0) * 2.0 + vec3(1.0,0.45,0.22) * pow(s, 5.0) * 0.35;
-      float band = sin(h * 90.0 + vD.x * 6.0) * 0.5 + 0.5;
-      c += vec3(0.08,0.03,0.02) * band * smoothstep(0.02,0.1,h) * smoothstep(0.3,0.1,h);
+      vec3 d = normalize(vD); float h = d.y;
+      vec3 zen = vec3(0.17,0.36,0.70), hor = vec3(0.70,0.80,0.90);
+      vec3 c = mix(hor, zen, pow(smoothstep(0.0, 0.9, h), 0.6));
+      c = mix(c, vec3(0.45,0.5,0.45), smoothstep(0.0, -0.12, h));
+      float s = max(dot(d, sunDir), 0.0);
+      c += vec3(1.0,0.96,0.88) * pow(s, 900.0) * 8.0 + vec3(1.0,0.92,0.75) * pow(s, 8.0) * 0.22;
+      if (h > 0.0) {
+        vec2 uv = d.xz / (h + 0.1) * 1.4;
+        float cl = smoothstep(0.52, 0.85, fbm(uv)) * smoothstep(0.0, 0.2, h);
+        vec3 cc = mix(vec3(0.97,0.97,0.99), vec3(0.66,0.71,0.79), smoothstep(0.62, 1.0, fbm(uv * 1.7 + 3.0)));
+        c = mix(c, cc, cl * 0.9);
+      }
       gl_FragColor = vec4(c, 1.0);
     }`
 }));
 scene.add(sky);
+// bake the sky into an environment map so every glossy surface picks up cold sky reflections
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const envScene = new THREE.Scene(); envScene.add(new THREE.Mesh(sky.geometry, sky.material));
+  scene.environment = pmrem.fromScene(envScene, 0, 0.1, 1000).texture;
+}
 
-scene.add(new THREE.HemisphereLight(0x9a86b8, 0x3b2818, 0.85));
-const sun = new THREE.DirectionalLight(0xffa065, 2.4);
-sun.position.copy(SUN_DIR).multiplyScalar(40);
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x6a5a40, 0.55));
+const sun = new THREE.DirectionalLight(0xfff0d8, 3.1);
+sun.position.copy(SUN_DIR).multiplyScalar(60);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -24, right: 24, top: 24, bottom: -24, near: 1, far: 100 });
-sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.03;
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 140 });
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 scene.add(sun);
+const coldFill = new THREE.DirectionalLight(0x9cc0ff, 1.1); // cold back light → steely rim glints
+coldFill.position.set(-35, 20, -40);
+scene.add(coldFill);
 
 // ============================================================ arena
 const sandTex = canvasTex(512, (g, s) => {
@@ -106,8 +128,23 @@ const sandTex = canvasTex(512, (g, s) => {
     g.fillRect(Math.random() * s, Math.random() * s, rand(1, 2.5), rand(1, 2.5));
   }
 }, 36);
-const ground = mesh(new THREE.CircleGeometry(80, 72), std(0xffffff, 1), scene, [0, 0, 0], [-Math.PI / 2, 0, 0]);
-ground.material.map = sandTex; ground.castShadow = false;
+const arenaFloor = mesh(new THREE.CircleGeometry(19.4, 72), std(0xffffff, 1), scene, [0, 0.004, 0], [-Math.PI / 2, 0, 0]);
+arenaFloor.material.map = sandTex; arenaFloor.castShadow = false;
+const grassTex = canvasTex(512, (g, s) => {
+  g.fillStyle = '#5d6e38'; g.fillRect(0, 0, s, s);
+  for (let i = 0; i < 70; i++) {
+    const x = Math.random() * s, y = Math.random() * s, r = rand(20, 80);
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, Math.random() < 0.4 ? 'rgba(120,98,62,.45)' : 'rgba(110,140,60,.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (let i = 0; i < 16000; i++) {
+    g.fillStyle = Math.random() < 0.5 ? `rgba(40,60,20,${rand(.2, .5)})` : `rgba(150,170,90,${rand(.15, .4)})`;
+    g.fillRect(Math.random() * s, Math.random() * s, 1, rand(1, 4));
+  }
+}, 70);
+const ground = mesh(new THREE.CircleGeometry(260, 72), std(0xffffff, 1), scene, [0, 0, 0], [-Math.PI / 2, 0, 0]);
+ground.material.map = grassTex; ground.castShadow = false;
 
 const woodTex = canvasTex(256, (g, s) => {
   g.fillStyle = '#5c4029'; g.fillRect(0, 0, s, s);
@@ -175,18 +212,253 @@ const darkWood = std(0x6b4a30, 0.9); darkWood.map = woodTex;
   const pen = mesh(new THREE.BoxGeometry(5, 6, 8), std(0x0d0806, 1), scene, [0, 3, -R - 4.4]);
   pen.material.side = THREE.BackSide;
 
-  // distant ridges
-  const ridgeMat = std(0x2a1a22, 1);
-  for (let i = 0; i < 26; i++) {
-    const a = rand(0, Math.PI * 2), r = rand(85, 160), h = rand(18, 55);
-    mesh(cone(rand(25, 50), h, 6), ridgeMat, scene, [Math.sin(a) * r, h / 2 - 2, Math.cos(a) * r], [0, rand(0, 3), 0]).castShadow = false;
-  }
-  // stands outside the wall
-  for (let i = 0; i < 40; i++) {
-    const a = (i / 40) * Math.PI * 2;
+  // two tiers of spectator stands behind the stockade
+  for (let i = 0; i < 44; i++) {
+    const a = (i / 44) * Math.PI * 2;
     if (Math.abs(angWrap(a - Math.PI)) < 0.4) continue;
-    mesh(new THREE.BoxGeometry(3.2, 0.25, 1.4), darkWood, scene, [Math.sin(a) * 20.2, 4.2, Math.cos(a) * 20.2], [0, a, 0]);
+    for (const [r, y] of STAND_TIERS) {
+      mesh(new THREE.BoxGeometry(2.9, 0.22, 1.4), darkWood, scene, [Math.sin(a) * r, y, Math.cos(a) * r], [0, a, 0]);
+      mesh(new THREE.BoxGeometry(0.18, y, 0.18), darkWood, scene, [Math.sin(a) * (r + 0.5), y / 2, Math.cos(a) * (r + 0.5)]);
+    }
   }
+})();
+
+// ============================================================ the town, city wall and castle
+function buildTown() {
+  const tmp = new THREE.Group();
+  const stoneTex = canvasTex(256, (g, s) => {
+    g.fillStyle = '#5e5b55'; g.fillRect(0, 0, s, s);
+    const rows = 8, h = s / rows;
+    for (let r = 0; r < rows; r++) {
+      let x = (r % 2) * -18;
+      while (x < s) { const w = rand(26, 46), v = rand(110, 160) | 0; g.fillStyle = `rgb(${v},${v - 2},${v - 8})`; g.fillRect(x + 2, r * h + 2, w - 3, h - 3); x += w; }
+    }
+    for (let i = 0; i < 3000; i++) { g.fillStyle = `rgba(${Math.random() < .5 ? '0,0,0' : '255,255,255'},${rand(.03, .1)})`; g.fillRect(rand(0, s), rand(0, s), 2, 2); }
+  });
+  const plasterTex = canvasTex(256, (g, s) => {
+    g.fillStyle = '#ddd2ba'; g.fillRect(0, 0, s, s);
+    for (let i = 0; i < 30; i++) { g.fillStyle = `rgba(120,100,70,${rand(.03, .08)})`; g.beginPath(); g.arc(rand(0, s), rand(0, s), rand(10, 40), 0, 7); g.fill(); }
+    g.fillStyle = '#3a291b'; g.strokeStyle = '#3a291b';
+    g.fillRect(0, 0, s, 12); g.fillRect(0, s - 12, s, 12);
+    for (const x of [0, s / 3, (2 * s) / 3, s]) g.fillRect(x - 7, 0, 14, s);
+    g.lineWidth = 11; g.beginPath(); g.moveTo(s / 3, s - 12); g.lineTo(2 * s / 3, 12); g.moveTo(s / 3, 12); g.lineTo(2 * s / 3, s - 12); g.stroke();
+    for (const cx of [s / 6, (5 * s) / 6]) {
+      const ww = (s / 3) * 0.45, wh = s * 0.38, wy = s * 0.45;
+      g.fillStyle = '#3a291b'; g.fillRect(cx - ww / 2 - 6, wy - wh / 2 - 6, ww + 12, wh + 12);
+      g.fillStyle = '#26303a'; g.fillRect(cx - ww / 2, wy - wh / 2, ww, wh);
+    }
+  });
+  const tileTex = (base, line) => canvasTex(256, (g, s) => {
+    g.fillStyle = base; g.fillRect(0, 0, s, s);
+    for (let r = 0; r < 12; r++) {
+      const y = r * (s / 12);
+      for (let x = (r % 2) * 10; x < s; x += 21) {
+        const gr = g.createLinearGradient(0, y, 0, y + s / 12);
+        gr.addColorStop(0, 'rgba(255,255,255,.12)'); gr.addColorStop(1, line);
+        g.fillStyle = gr; g.fillRect(x, y, 19, s / 12 - 2);
+      }
+    }
+  });
+  const stoneM = std(0xffffff, 0.82); stoneM.map = stoneTex; stoneM.userData.world = 3.5;
+  const plasterM = std(0xffffff, 0.9); plasterM.map = plasterTex;
+  const gableM = std(0xd8ccb2, 0.9, 0, { side: THREE.DoubleSide });
+  const roofM = phys(0xffffff, 0.55, 0, { map: tileTex('#8a4a32', 'rgba(40,10,5,.55)'), side: THREE.DoubleSide, clearcoat: 0.3, clearcoatRoughness: 0.4 }); roofM.userData.world = 2.6;
+  const slateM = phys(0xffffff, 0.3, 0.15, { map: tileTex('#4b5866', 'rgba(10,15,25,.6)'), side: THREE.DoubleSide, clearcoat: 0.8, clearcoatRoughness: 0.15 }); slateM.userData.world = 2.6;
+  const glassM = phys(0x1b2733, 0.04, 0.2, { clearcoat: 1, clearcoatRoughness: 0.02 });
+  const doorM = std(0x3d2716, 0.8);
+  const beamM = std(0x3a291b, 0.85);
+  const clothM = std(0x8a2219, 0.9, 0, { side: THREE.DoubleSide });
+  const hillM = std(0x5a7038, 1);
+  const pineM = std(0x2f4a2a, 0.9), trunkM = std(0x4a3322, 0.9);
+  const mountM = std(0x6a7a8a, 1), snowM = phys(0xf2f6ff, 0.35, 0, { clearcoat: 0.6 });
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+
+  function gableGeo(w, d, h) {
+    const P = [], U = [], I = [];
+    const quad = (a, b, c, e) => { const i = P.length / 3; P.push(...a, ...b, ...c, ...e); U.push(0, 0, 1, 0, 1, 1, 0, 1); I.push(i, i + 1, i + 2, i, i + 2, i + 3); };
+    const x = w / 2, z = d / 2;
+    quad([-x, 0, z], [x, 0, z], [x, h, 0], [-x, h, 0]);
+    quad([x, 0, -z], [-x, 0, -z], [-x, h, 0], [x, h, 0]);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+    g.setIndex(I); g.computeVertexNormals(); return g;
+  }
+  function gableEndGeo(w, d, h) {
+    const x = w / 2, z = d / 2;
+    const P = [-x, 0, -z, -x, 0, z, -x, h, 0, x, 0, z, x, 0, -z, x, h, 0];
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, .5, 1, 0, 0, 1, 0, .5, 1], 2));
+    g.computeVertexNormals(); return g;
+  }
+  const crenels = (parent, len, y, z, step = 2.2) => { for (let x = -len / 2 + 0.6; x < len / 2; x += step) mesh(box(1.1, 1.3, 0.9), stoneM, parent, [x, y + 0.65, z]); };
+  function roundTower(parent, x, z, r, h, roofH, base = 0) {
+    mesh(new THREE.CylinderGeometry(r, r * 1.08, h, 20), stoneM, parent, [x, base + h / 2, z]);
+    mesh(new THREE.CylinderGeometry(r * 1.15, r, 1, 20), stoneM, parent, [x, base + h + 0.5, z]);
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; mesh(box(0.9, 1.2, 0.7), stoneM, parent, [x + Math.sin(a) * r * 1.08, base + h + 1.6, z + Math.cos(a) * r * 1.08], [0, a, 0]); }
+    mesh(cone(r * 1.25, roofH, 20), slateM, parent, [x, base + h + 1 + roofH / 2, z]);
+    for (let i = 0; i < 3; i++) { const a = rand(0, 6.28); mesh(box(0.35, 1.1, 0.2), glassM, parent, [x + Math.sin(a) * r * 1.02, base + h * rand(0.45, 0.85), z + Math.cos(a) * r * 1.02], [0, a, 0]); }
+  }
+  function banner(parent, x, y, z, rot) {
+    mesh(new THREE.CylinderGeometry(0.08, 0.08, 4, 6), beamM, parent, [x, y + 2, z]);
+    mesh(new THREE.PlaneGeometry(1.6, 1.0), clothM, parent, [x + Math.cos(rot) * 0.85, y + 3.4, z - Math.sin(rot) * 0.85], [0, rot, 0]);
+  }
+
+  function house(x, z, rot) {
+    const g = new THREE.Group(); g.position.set(x, 0, z); g.rotation.y = rot; tmp.add(g);
+    const w = rand(5, 7.5), d = rand(5, 6.5), storeys = Math.random() < 0.5 ? 2 : 3, gh = 3.2;
+    mesh(box(w, gh, d), stoneM, g, [0, gh / 2, 0]);
+    mesh(box(1.2, 2.2, 0.12), doorM, g, [rand(-w / 4, w / 4), 1.1, d / 2 + 0.05]);
+    for (const sx of [-1, 1]) mesh(box(0.7, 0.9, 0.08), glassM, g, [sx * w * 0.33, 1.9, d / 2 + 0.04]);
+    let y = gh, jet = 0, fw = w, fd = d;
+    for (let i = 1; i < storeys; i++) {
+      jet += 0.3; fw = w + jet * 0.6; fd = d + jet;
+      mesh(box(fw + 0.1, 0.22, fd + 0.1), beamM, g, [0, y + 0.11, jet / 2]);
+      mesh(box(fw, 2.8, fd), plasterM, g, [0, y + 0.22 + 1.4, jet / 2]);
+      for (const sx of [-1, 1]) mesh(box(fw / 3 * 0.45, 1.06, 0.06), glassM, g, [sx * fw / 3, y + 0.22 + 1.54, jet / 2 + fd / 2 + 0.02]);
+      y += 3.02;
+    }
+    const rh = fd * rand(0.6, 0.85);
+    const roof = new THREE.Mesh(gableGeo(fw + 0.7, fd + 0.9, rh), roofM); roof.position.set(0, y, jet / 2); g.add(roof);
+    const ends = new THREE.Mesh(gableEndGeo(fw, fd, rh * 0.94), gableM); ends.position.set(0, y, jet / 2); g.add(ends);
+    if (Math.random() < 0.8) mesh(box(0.7, rh + 1.4, 0.7), stoneM, g, [fw * rand(-0.35, 0.35), y + (rh + 1.4) / 2, -fd * 0.2]);
+  }
+
+  // houses in rings around the arena, leaving a road open towards the castle
+  for (const [r, n, jitter] of [[27, 24, 1.5], [37, 30, 2], [48, 36, 2.5]]) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + rand(-0.04, 0.04);
+      if (Math.abs(angWrap(a - Math.PI)) < 6 / r) continue;
+      if (r === 37 && Math.abs(angWrap(a - 1.05)) < 0.18) continue; // bell tower plot
+      const rr = r + rand(-jitter, jitter);
+      house(Math.sin(a) * rr, Math.cos(a) * rr, a + Math.PI + rand(-0.12, 0.12));
+    }
+  }
+  // bell tower
+  {
+    const a = 1.05, r = 37, g = new THREE.Group(); g.position.set(Math.sin(a) * r, 0, Math.cos(a) * r); g.rotation.y = a; tmp.add(g);
+    mesh(box(6, 22, 6), stoneM, g, [0, 11, 0]);
+    for (const [sx, sz, ry] of [[0, 3.02, 0], [0, -3.02, 0], [3.02, 0, Math.PI / 2], [-3.02, 0, Math.PI / 2]]) mesh(box(1.4, 3, 0.1), glassM, g, [sx, 18, sz], [0, ry, 0]);
+    mesh(box(7, 0.8, 7), stoneM, g, [0, 22.4, 0]);
+    mesh(cone(5.2, 12, 4), slateM, g, [0, 28.8, 0], [0, Math.PI / 4, 0]);
+    mesh(box(10, 9, 7), stoneM, g, [0, 4.5, -6.5]);
+    const roof = new THREE.Mesh(gableGeo(7.6, 11, 5), slateM); roof.position.set(0, 9, -6.5); roof.rotation.y = Math.PI / 2; g.add(roof);
+  }
+  // city wall with towers
+  {
+    const R = 62, N = 16;
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2, b = ((i + 1) / N) * Math.PI * 2, m = (a + b) / 2;
+      roundTower(tmp, Math.sin(a) * R, Math.cos(a) * R, 3.4, 13, 7);
+      if (Math.abs(angWrap(m - Math.PI)) < 0.15) continue; // the castle road passes here
+      const len = 2 * R * Math.sin(Math.PI / N) - 6;
+      const g = new THREE.Group(); g.position.set(Math.sin(m) * R * Math.cos(Math.PI / N), 0, Math.cos(m) * R * Math.cos(Math.PI / N)); g.rotation.y = m + Math.PI / 2; tmp.add(g);
+      mesh(box(len, 9, 2.4), stoneM, g, [0, 4.5, 0]);
+      crenels(g, len, 9, 0.9);
+    }
+  }
+  // castle on a hill beyond the gate
+  {
+    const cx = 0, cz = -112, base = 9;
+    mesh(new THREE.SphereGeometry(1, 32, 16), hillM, tmp, [cx, -4, cz], [0, 0, 0], [62, 14, 50]);
+    const g = new THREE.Group(); g.position.set(cx, 0, cz); tmp.add(g);
+    const W = 56, D = 40, H = 12;
+    for (const [x, z, w, d] of [[0, -D / 2, W, 2.8], [-W / 2, 0, 2.8, D], [W / 2, 0, 2.8, D]]) {
+      mesh(box(w, base + H, d), stoneM, g, [x, (base + H) / 2, z]);
+    }
+    for (const s of [-1, 1]) mesh(box(W / 2 - 5, base + H, 2.8), stoneM, g, [s * (W / 4 + 2.5), (base + H) / 2, D / 2]);
+    for (const [len, x, z, ry] of [[W, 0, D / 2 + 1, 0], [W, 0, -D / 2 - 1, 0], [D, W / 2 + 1, 0, Math.PI / 2], [D, -W / 2 - 1, 0, Math.PI / 2]]) {
+      const c = new THREE.Group(); c.position.set(x, 0, z); c.rotation.y = ry; g.add(c); crenels(c, len, base + H, 0);
+    }
+    for (const [x, z] of [[-W / 2, -D / 2], [W / 2, -D / 2], [-W / 2, D / 2], [W / 2, D / 2]]) roundTower(g, x, z, 4.4, base + 19, 10);
+    for (const s of [-1, 1]) roundTower(g, s * 4.6, D / 2 + 1, 3.1, base + 16, 7);
+    mesh(box(5.4, 7, 1), doorM, g, [0, base + 3.5, D / 2 + 1.6]);
+    // the keep
+    mesh(box(17, base + 30, 15), stoneM, g, [0, (base + 30) / 2, -5]);
+    for (const [len, x, z, ry] of [[17, 0, 2.6, 0], [17, 0, -12.6, 0], [15, 8.6, -5, Math.PI / 2], [15, -8.6, -5, Math.PI / 2]]) {
+      const c = new THREE.Group(); c.position.set(x, 0, z); c.rotation.y = ry; g.add(c); crenels(c, len, base + 30, 0, 2.0);
+    }
+    for (const [x, z] of [[-8.5, 2.5], [8.5, 2.5], [-8.5, -12.5], [8.5, -12.5]]) roundTower(g, x, z, 1.8, base + 35, 6);
+    for (let i = 0; i < 4; i++) for (const s of [-1, 1]) mesh(box(0.6, 2.2, 0.1), glassM, g, [s * (2 + i * 1.6), base + 14 + (i % 2) * 7, 2.56]);
+    banner(g, 0, base + 30, -5, 0); banner(g, -W / 2, base + 30, -D / 2, 0.4); banner(g, W / 2, base + 30, -D / 2, -0.4);
+    // dirt road from the arena gate to the castle
+    const road = mesh(new THREE.PlaneGeometry(6, 80), std(0x7c6448, 1), scene, [0, 0.02, -58], [-Math.PI / 2, 0, 0]);
+    road.castShadow = false;
+  }
+  // forest and mountains beyond the walls
+  for (let i = 0; i < 140; i++) {
+    const a = rand(0, Math.PI * 2), r = rand(70, 150);
+    const x = Math.sin(a) * r, z = Math.cos(a) * r;
+    if (Math.hypot(x, z + 112) < 62) continue;
+    const s = rand(0.8, 1.5);
+    mesh(new THREE.CylinderGeometry(0.3 * s, 0.4 * s, 3 * s, 6), trunkM, tmp, [x, 1.5 * s, z]);
+    for (let k = 0; k < 3; k++) mesh(cone((3 - k * 0.7) * s, 4 * s, 8), pineM, tmp, [x, (3 + k * 2.4) * s, z]);
+  }
+  for (let i = 0; i < 22; i++) {
+    const a = (i / 22) * Math.PI * 2 + rand(-0.1, 0.1), r = rand(185, 215), h = rand(45, 90), rad = rand(40, 65);
+    mesh(cone(rad, h, 7), mountM, tmp, [Math.sin(a) * r, h / 2 - 3, Math.cos(a) * r], [0, rand(0, 3), 0]);
+    mesh(cone(rad * 0.32, h * 0.32, 7), snowM, tmp, [Math.sin(a) * r, h - 3 - h * 0.16 + 0.3, Math.cos(a) * r], [0, rand(0, 3), 0]);
+  }
+  bakeStatic(tmp);
+}
+// merge all static town geometry by material → a handful of draw calls
+function bakeStatic(group) {
+  group.updateMatrixWorld(true);
+  const bins = new Map();
+  group.traverse(o => {
+    if (!o.isMesh) return;
+    let g = o.geometry.clone().applyMatrix4(o.matrixWorld);
+    if (g.index) g = g.toNonIndexed();
+    for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+    const ws = o.material.userData.world;
+    if (ws) {
+      const p = g.attributes.position, n = g.attributes.normal, uv = g.attributes.uv;
+      for (let i = 0; i < p.count; i++) {
+        const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i)), az = Math.abs(n.getZ(i));
+        let u, v;
+        if (ay >= ax && ay >= az) { u = p.getX(i); v = p.getZ(i); } else if (ax >= az) { u = p.getZ(i); v = p.getY(i); } else { u = p.getX(i); v = p.getY(i); }
+        uv.setXY(i, u / ws, v / ws);
+      }
+    }
+    if (!bins.has(o.material)) bins.set(o.material, []);
+    bins.get(o.material).push(g);
+  });
+  for (const [mat, arr] of bins) {
+    const m = new THREE.Mesh(mergeGeometries(arr), mat);
+    m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
+    scene.add(m);
+  }
+}
+buildTown();
+
+// spectators on the stands — instanced, they jump when blood is drawn
+let crowdExcite = 0;
+const crowd = (() => {
+  const spots = [];
+  for (const [r, y] of STAND_TIERS) for (let i = 0; i < 70; i++) {
+    const a = rand(0, Math.PI * 2);
+    if (Math.abs(angWrap(a - Math.PI)) < 0.45) continue;
+    spots.push({ a, r: r + rand(-0.3, 0.3), y: y + 0.11, ph: rand(0, 6), sp: rand(0.8, 1.3) });
+  }
+  const bodies = new THREE.InstancedMesh(capsule(0.22, 0.55), std(0xffffff, 0.9), spots.length);
+  const heads = new THREE.InstancedMesh(sphere(0.16, 10, 8), std(0xc89a7a, 0.7), spots.length);
+  const tunic = [0x6b2a20, 0x2d4a6b, 0x5a5a2a, 0x7a6a50, 0x3a5a3a, 0x8a7a60, 0x4a3a5a, 0x8a3a1a];
+  const c = new THREE.Color();
+  spots.forEach((s, i) => { bodies.setColorAt(i, c.setHex(tunic[i % tunic.length])); });
+  bodies.castShadow = heads.castShadow = true;
+  scene.add(bodies, heads);
+  const d = new THREE.Object3D();
+  return {
+    update(t) {
+      spots.forEach((s, i) => {
+        const jump = Math.max(0, Math.sin(t * (2.5 + crowdExcite * 7) * s.sp + s.ph)) * (0.03 + crowdExcite * 0.35);
+        d.position.set(Math.sin(s.a) * s.r, s.y + 0.5 + jump, Math.cos(s.a) * s.r);
+        d.rotation.set(0, s.a + Math.PI, Math.sin(t * 1.3 + s.ph) * 0.05); d.updateMatrix(); bodies.setMatrixAt(i, d.matrix);
+        d.position.y += 0.52; d.updateMatrix(); heads.setMatrixAt(i, d.matrix);
+      });
+      bodies.instanceMatrix.needsUpdate = true; heads.instanceMatrix.needsUpdate = true;
+    },
+  };
 })();
 
 // props scattered around the edge
@@ -382,7 +654,7 @@ const torches = [];
     mesh(new THREE.CylinderGeometry(0.22, 0.1, 0.25, 10, 1, true), ironMat, scene, [x, 2.78, z]);
     const t = { p: new V3(x, 2.95, z), acc: 0, seed: rand(0, 100), light: null };
     if (i % 2 === 0) {
-      t.light = new THREE.PointLight(0xff8a3c, 40, 17, 1.7);
+      t.light = new THREE.PointLight(0xff8a3c, 10, 12, 1.7);
       t.light.position.copy(t.p).add(new V3(-x * 0.03, 0.3, -z * 0.03));
       scene.add(t.light);
     }
@@ -402,7 +674,7 @@ function updateTorches(dt, time) {
     }
     if (t.light) {
       const f = Math.sin(time * 11 + t.seed) * 0.5 + Math.sin(time * 23.7 + t.seed * 2) * 0.3 + Math.sin(time * 5.3 + t.seed) * 0.2;
-      t.light.intensity = 40 * (0.85 + 0.15 * f);
+      t.light.intensity = 10 * (0.85 + 0.15 * f);
     }
   }
 }
@@ -423,7 +695,125 @@ function initAudio() {
   src.connect(f).connect(g).connect(master); src.start();
   const lfo = AC.createOscillator(); lfo.frequency.value = 0.11;
   const lg = AC.createGain(); lg.gain.value = 170; lfo.connect(lg).connect(f.frequency); lfo.start();
+  Music.init(AC, master);
 }
+
+// ============================================================ orchestral score
+// An original battle theme in D minor, written as MIDI note numbers and played by a small
+// Web Audio "orchestra": string section, horns/trumpets, low-string ostinato, timpani, snare, cymbals.
+const Music = (() => {
+  let ctx, out, layers = {}, nextT = 0, step = 0, on = true, intensity = -1;
+  const BPM = 104, S16 = 60 / BPM / 4, LOOP = 256;
+  const mtof = n => 440 * Math.pow(2, (n - 69) / 12);
+  const CH = { Dm: [50, 57, 62, 65], Bb: [46, 58, 62, 65], C: [48, 55, 64, 67], Am: [45, 57, 60, 64], Gm: [43, 55, 62, 67], A: [45, 57, 61, 64], F: [41, 57, 60, 65] };
+  const PROG = [['Dm', 'Bb', 'C', 'Am', 'Dm', 'Gm', 'A', 'A'], ['F', 'C', 'Dm', 'Bb', 'Gm', 'Dm', 'A', 'A']];
+  // [beat, beats, midi] per bar
+  const MEL = [[
+    [[0, 1.5, 62], [1.5, 0.5, 65], [2, 2, 69]],
+    [[0, 1, 70], [1, 1, 69], [2, 1, 67], [3, 1, 65]],
+    [[0, 1.5, 67], [1.5, 0.5, 64], [2, 2, 72]],
+    [[0, 3, 69], [3, 1, 67]],
+    [[0, 1.5, 65], [1.5, 0.5, 67], [2, 1, 69], [3, 1, 74]],
+    [[0, 2, 74], [2, 1, 72], [3, 1, 70]],
+    [[0, 1, 69], [1, 1, 73], [2, 2, 76]],
+    [[0, 4, 69]],
+  ], [
+    [[0, 2, 72], [2, 1, 69], [3, 1, 72]],
+    [[0, 2, 76], [2, 2, 72]],
+    [[0, 1.5, 74], [1.5, 0.5, 72], [2, 1, 69], [3, 1, 65]],
+    [[0, 3, 70], [3, 1, 74]],
+    [[0, 1.5, 74], [1.5, 0.5, 72], [2, 2, 70]],
+    [[0, 1, 69], [1, 1, 65], [2, 2, 62]],
+    [[0, 1.5, 64], [1.5, 0.5, 67], [2, 2, 73]],
+    [[0, 2, 76], [2, 2, 69]],
+  ]];
+  const OST = [0, 0, 12, 0, 0, 7, 12, 0];
+  function impulse() {
+    const len = ctx.sampleRate * 3.2, b = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = b.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.8); }
+    return b;
+  }
+  function init(c, dest) {
+    if (ctx) return;
+    ctx = c; out = ctx.createGain(); out.gain.value = 0.5; out.connect(dest);
+    const rev = ctx.createConvolver(); rev.buffer = impulse();
+    const wet = ctx.createGain(); wet.gain.value = 0.5; rev.connect(wet).connect(out);
+    for (const [k, send] of [['strings', 0.7], ['low', 0.3], ['brass', 0.5], ['melody', 0.55], ['perc', 0.4]]) {
+      const g = ctx.createGain(); g.gain.value = 0; g.connect(out);
+      const s = ctx.createGain(); s.gain.value = send; g.connect(s).connect(rev);
+      layers[k] = g;
+    }
+    nextT = ctx.currentTime + 0.15;
+    setInterval(tick, 40);
+  }
+  function voice(layer, { type = 'sawtooth', n, t, dur, vel = 0.1, a = 0.05, r = 0.3, cut = 2000, cutEnv = 0, detune = [0], vib = 0, q = 0.7 }) {
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.Q.value = q;
+    if (cutEnv) { f.frequency.setValueAtTime(cut * 0.3, t); f.frequency.linearRampToValueAtTime(cut, t + cutEnv); } else f.frequency.setValueAtTime(cut, t);
+    const g = ctx.createGain(), hold = Math.max(a, dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vel, t + a);
+    g.gain.setValueAtTime(vel, t + hold); g.gain.exponentialRampToValueAtTime(0.0001, t + hold + r);
+    f.connect(g).connect(layers[layer]);
+    let lg = null;
+    if (vib) { const l = ctx.createOscillator(); l.frequency.value = 5.3; lg = ctx.createGain(); lg.gain.value = vib; l.connect(lg); l.start(t); l.stop(t + hold + r + 0.1); }
+    for (const d of detune) {
+      const o = ctx.createOscillator(); o.type = type; o.frequency.value = mtof(n); o.detune.value = d;
+      if (lg) lg.connect(o.detune);
+      o.connect(f); o.start(t); o.stop(t + hold + r + 0.1);
+    }
+  }
+  function timpani(n, t, vel) {
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(mtof(n) * 1.06, t); o.frequency.exponentialRampToValueAtTime(mtof(n), t + 0.08);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vel, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
+    o.connect(g).connect(layers.perc); o.start(t); o.stop(t + 1.4);
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
+    const ng = ctx.createGain(); ng.gain.setValueAtTime(vel * 0.5, t); ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+    s.connect(f).connect(ng).connect(layers.perc); s.start(t, Math.random()); s.stop(t + 0.2);
+  }
+  function hitNoise(t, { type, f0, q = 0.8, vel, dur }) {
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = f0; f.Q.value = q;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vel, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f).connect(g).connect(layers.perc); s.start(t, Math.random()); s.stop(t + dur + 0.05);
+  }
+  const snare = (t, vel) => { hitNoise(t, { type: 'bandpass', f0: 1900, vel, dur: 0.14 }); voice('perc', { type: 'triangle', n: 54, t, dur: 0.02, vel: vel * 0.5, a: 0.003, r: 0.06, cut: 3000 }); };
+  const cymbal = (t, vel) => hitNoise(t, { type: 'highpass', f0: 6500, vel, dur: 2.2 });
+  function schedule(s, t) {
+    const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
+    const ch = CH[PROG[sec][bi]], bar4 = 16 * S16;
+    if (p === 0) {
+      for (const n of ch.slice(1)) voice('strings', { n: n + 12, t, dur: bar4, vel: 0.035, a: 0.35, r: 0.8, cut: 2600, detune: [-9, 0, 9], vib: 9 });
+      for (const n of [ch[0], ch[0] - 12]) voice('strings', { n, t, dur: bar4, vel: 0.045, a: 0.25, r: 0.7, cut: 900, detune: [-6, 6] });
+      if (bi === 0) cymbal(t, 0.12);
+      if (sec === 1 || bi % 4 === 0) for (const n of ch.slice(1)) voice('brass', { n, t, dur: sec ? 8 * S16 : bar4, vel: sec ? 0.045 : 0.03, a: sec ? 0.03 : 0.2, r: 0.4, cut: sec ? 2600 : 1300, cutEnv: 0.12, detune: [-5, 5] });
+    }
+    if (sec === 1 && bi >= 6 && p === 8) for (const n of ch.slice(1)) voice('brass', { n, t, dur: 6 * S16, vel: 0.05, a: 0.02, r: 0.4, cut: 2800, cutEnv: 0.1, detune: [-5, 5] });
+    if (p % 2 === 0) voice('low', { n: ch[0] + OST[p / 2], t, dur: S16 * 1.1, vel: 0.075, a: 0.006, r: 0.08, cut: 1500, cutEnv: 0.025, detune: [-6, 6] });
+    for (const [beat, len, n] of MEL[sec][bi]) {
+      if (beat * 4 !== p) continue;
+      voice('melody', { n, t, dur: len * 4 * S16 * 0.94, vel: 0.075, a: 0.06, r: 0.3, cut: sec ? 2900 : 1800, cutEnv: 0.09, detune: [-7, 0, 7], vib: 14 });
+      voice('melody', { type: 'triangle', n: n - 12, t, dur: len * 4 * S16 * 0.94, vel: 0.05, a: 0.08, r: 0.3, cut: 1200 });
+    }
+    let tn = ch[0]; while (tn > 45) tn -= 12; while (tn < 36) tn += 12;
+    if (bi === 7) timpani(45, t, 0.15 + (p / 16) * 0.35);
+    else if (p === 0 || p === 8 || (p === 14 && bi % 2 === 1)) timpani(p === 8 ? tn + 7 > 45 ? tn - 5 : tn + 7 : tn, t, p === 14 ? 0.25 : 0.45);
+    if (sec === 1 && (p === 4 || p === 12)) snare(t, 0.22);
+    if (sec === 1 && p === 14) snare(t, 0.08);
+    if (bi === 7 && p >= 8) snare(t, 0.06 + (p - 8) * 0.03);
+  }
+  function tick() {
+    if (!ctx) return;
+    if (nextT < ctx.currentTime - 1) nextT = ctx.currentTime + 0.05; // tab was in the background
+    while (nextT < ctx.currentTime + 0.25) { schedule(step, nextT); nextT += S16; step = (step + 1) % LOOP; }
+  }
+  function setIntensity(x) {
+    if (!ctx || Math.abs(x - intensity) < 0.01) return;
+    intensity = x;
+    const now = ctx.currentTime, lv = { strings: 1, low: x, brass: 0.35 + 0.65 * x, melody: 0.45 + 0.55 * x, perc: x * x };
+    for (const k in lv) layers[k].gain.setTargetAtTime(lv[k], now, 1.2);
+  }
+  function toggle() { if (!ctx) return; on = !on; out.gain.setTargetAtTime(on ? 0.5 : 0, ctx.currentTime, 0.2); return on; }
+  return { init, setIntensity, toggle };
+})();
 function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.4, attack = 0.004, delay = 0 }) {
   if (!AC) return;
   const t = AC.currentTime + delay;
@@ -484,9 +874,14 @@ const SFX = {
 // ============================================================ the hero
 function buildHero() {
   const M = {
-    skin: std(0xc4906f, 0.75), leather: std(0x4b3020, 0.8), cloth: std(0x37362c, 0.95),
-    sash: std(0x8c2a1c, 0.9), boot: std(0x271a10, 0.85), hair: std(0x2a1b12, 1),
-    metal: std(0xc2c7cf, 0.28, 0.95, { emissive: 0x000000 }), iron: std(0x3a3632, 0.5, 0.7), eye: std(0x111111, 0.3),
+    skin: phys(0xc4906f, 0.6, 0, { sheen: 0.3, sheenColor: 0xffd8c0 }),
+    leather: phys(0x4b3020, 0.55, 0, { clearcoat: 0.55, clearcoatRoughness: 0.3 }),
+    cloth: phys(0x37362c, 0.85, 0, { sheen: 0.7, sheenColor: 0x9fb4cc, sheenRoughness: 0.45 }),
+    sash: phys(0x8c2a1c, 0.8, 0, { sheen: 0.5, sheenColor: 0xd0c0c8 }),
+    boot: phys(0x271a10, 0.45, 0, { clearcoat: 0.6, clearcoatRoughness: 0.25 }), hair: std(0x2a1b12, 1),
+    metal: phys(0xd8e0ea, 0.12, 1.0, { clearcoat: 1, clearcoatRoughness: 0.06, emissive: 0x000000 }),
+    steel: phys(0xb4bfcc, 0.2, 1.0, { clearcoat: 0.9, clearcoatRoughness: 0.12 }),
+    iron: phys(0x5c6168, 0.3, 0.9, { clearcoat: 0.6, clearcoatRoughness: 0.2 }), eye: phys(0x111111, 0.1, 0, { clearcoat: 1 }),
   };
   const root = new THREE.Group(); root.rotation.order = 'YXZ';
   const j = {};
@@ -499,12 +894,13 @@ function buildHero() {
   mesh(new THREE.BoxGeometry(0.4, 0.5, 0.25), M.leather, spine, [0, 0.29, 0]);
   mesh(new THREE.BoxGeometry(0.42, 0.06, 0.27), M.iron, spine, [0, 0.12, 0]);
   mesh(new THREE.BoxGeometry(0.06, 0.55, 0.27), M.sash, spine, [0.05, 0.3, 0], [0, 0, 0.55]); // shoulder strap
-  for (const s of [1, -1]) mesh(sphere(0.12), M.leather, spine, [s * 0.24, 0.52, 0], [0, 0, 0], [1.1, 0.7, 1]);
+  for (const s of [1, -1]) mesh(sphere(0.125, 16, 12), M.steel, spine, [s * 0.24, 0.53, 0], [0, 0, 0], [1.15, 0.72, 1.05]); // pauldrons
   const neck = new THREE.Group(); neck.position.y = 0.56; spine.add(neck); j.neck = neck;
   mesh(new THREE.CylinderGeometry(0.055, 0.065, 0.12, 8), M.skin, neck, [0, 0.05, 0]);
   const head = new THREE.Group(); head.position.y = 0.12; neck.add(head);
   mesh(sphere(0.12, 16, 12), M.skin, head, [0, 0.09, 0.01], [0, 0, 0], [0.95, 1.12, 1.05]);
-  mesh(new THREE.SphereGeometry(0.128, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), M.hair, head, [0, 0.1, -0.006], [-0.25, 0, 0]);
+  mesh(new THREE.SphereGeometry(0.132, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.55), M.steel, head, [0, 0.1, -0.006], [-0.2, 0, 0]); // skullcap
+  mesh(new THREE.BoxGeometry(0.022, 0.09, 0.02), M.steel, head, [0, 0.13, 0.13]); // nasal guard
   mesh(new THREE.BoxGeometry(0.17, 0.08, 0.06), M.hair, head, [0, 0.01, 0.1], [0.2, 0, 0]); // beard
   for (const s of [1, -1]) mesh(sphere(0.016, 6, 5), M.eye, head, [s * 0.045, 0.11, 0.115]);
   mesh(new THREE.BoxGeometry(0.03, 0.05, 0.04), M.skin, head, [0, 0.07, 0.125]); // nose
@@ -514,7 +910,7 @@ function buildHero() {
     mesh(capsule(0.058, 0.2), M.cloth, sh, [0, -0.15, 0]);
     const el = new THREE.Group(); el.position.y = -0.3; sh.add(el);
     mesh(capsule(0.05, 0.18), M.skin, el, [0, -0.13, 0]);
-    mesh(new THREE.CylinderGeometry(0.062, 0.056, 0.15, 8), M.leather, el, [0, -0.17, 0]);
+    mesh(new THREE.CylinderGeometry(0.064, 0.057, 0.16, 12), M.steel, el, [0, -0.17, 0]); // vambrace
     const ha = new THREE.Group(); ha.position.y = -0.28; el.add(ha);
     mesh(sphere(0.055, 8, 6), M.skin, ha, [0, 0, 0.01], [0, 0, 0], [1, 1.1, 1.2]);
     return [sh, el, ha];
@@ -617,9 +1013,14 @@ const PALETTES = [
 ];
 function buildBeast(scale, pal) {
   const M = {
-    plume: std(pal.plume, 0.95), rust: std(pal.rust, 0.95), belly: std(pal.belly, 0.95),
-    bone: std(0xdacbaa, 0.55), scale: std(0x5e4a33, 0.8), claw: std(0x1f1710, 0.45),
-    eye: new THREE.MeshStandardMaterial({ color: 0x221100, emissive: 0xffa21a, emissiveIntensity: 2.4 }),
+    // glossy, oily plumage with a cold blue sheen; lacquered beak, thorns and talons
+    plume: phys(pal.plume, 0.5, 0, { sheen: 1, sheenColor: 0xb8d0ff, sheenRoughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.35 }),
+    rust: phys(pal.rust, 0.55, 0, { sheen: 0.8, sheenColor: 0xd4e2ff, sheenRoughness: 0.35, clearcoat: 0.2 }),
+    belly: phys(pal.belly, 0.6, 0, { sheen: 0.6, sheenColor: 0xe0e8ff }),
+    bone: phys(0xe2d6bc, 0.25, 0, { clearcoat: 1, clearcoatRoughness: 0.08 }),
+    scale: phys(0x5e4a33, 0.35, 0.1, { clearcoat: 0.85, clearcoatRoughness: 0.18 }),
+    claw: phys(0x1f1710, 0.18, 0.2, { clearcoat: 1, clearcoatRoughness: 0.04 }),
+    eye: phys(0x221100, 0.1, 0, { clearcoat: 1, clearcoatRoughness: 0, emissive: 0xffa21a, emissiveIntensity: 2.4 }),
   };
   const root = new THREE.Group();
   const r = { root, M };
@@ -723,6 +1124,7 @@ class Beast {
     bloodBurst(hp, dir, heavy ? 34 : 20);
     feathers(hp, heavy ? 6 : 3, [this.pal.plume >> 16 & 255, this.pal.plume >> 8 & 255, this.pal.plume & 255].map(v => v / 255 * 0.6));
     hitStop = heavy ? 0.12 : 0.07; shake = Math.max(shake, heavy ? 0.55 : 0.3); SFX.hit(heavy);
+    crowdExcite = Math.min(1, crowdExcite + (heavy ? 0.6 : 0.35));
     if (this.hp <= 0) { this.die(dir); return; }
     this.hitChain = time - this.lastHit < 1.7 ? this.hitChain + 1 : 1; this.lastHit = time;
     if (this.state === 'lunge' && !heavy) return; // hyper-armour mid-charge
@@ -741,7 +1143,7 @@ class Beast {
   die(dir) {
     this.dead = true; this.hp = 0; this.setState('dead'); this.vel.copy(dir).multiplyScalar(4);
     this.dieRoll = Math.random() < 0.5 ? 1.4 : -1.4;
-    SFX.screech(this.pitch * 0.8); slowMo = 0.9;
+    SFX.screech(this.pitch * 0.8); slowMo = 0.9; crowdExcite = 1;
     setTimeout(() => { SFX.thud(); dust(this.pos, 22, 1.2, 1.6); addDecal(this.pos.x, this.pos.z, 1.3); }, 520);
     onBeastDeath();
   }
@@ -1194,6 +1596,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Tab') lockOn = !lockOn;
   if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none';
   if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : 0.6;
+  if (e.code === 'KeyN') Music.toggle();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; });
@@ -1235,8 +1638,8 @@ const camLook = new V3(0, 1.5, 0);
 function updateCamera(dt) {
   if (game.state === 'title') {
     const a = time * 0.08;
-    camera.position.set(Math.sin(a) * 12, 5.5, Math.cos(a) * 12);
-    camera.lookAt(0, 1.4, 0);
+    camera.position.set(Math.sin(a) * 15, 8.5, Math.cos(a) * 15);
+    camera.lookAt(0, 3.5, 0);
     return;
   }
   const target = currentTarget();
@@ -1313,6 +1716,10 @@ function loop(now) {
   clockEl.crackle -= rdt;
   if (clockEl.crackle <= 0 && AC) { clockEl.crackle = rand(0.05, 0.35); SFX.crackle?.(); }
   updateBanners();
+  crowdExcite = Math.max(0, crowdExcite - rdt * 0.35);
+  crowd.update(time);
+  const fighting = game.state === 'play' && beasts.some(e => !e.dead && e.state !== 'wait');
+  Music.setIntensity(fighting ? 1 : game.state === 'play' || game.state === 'between' ? 0.45 : 0.2);
   fxAdd.update(dt); fxNorm.update(dt); trail.update(dt);
   updateCamera(rdt);
   sky.position.copy(camera.position);
