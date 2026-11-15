@@ -17,7 +17,7 @@ const ARENA_R = 17.2;
 const STAND_TIERS = [[20.3, 5.0], [21.7, 6.2]];
 
 // ============================================================ renderer / scene
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
@@ -67,17 +67,30 @@ function canvasTex(size, draw, rep = 1) {
 }
 
 // ============================================================ sky + lights
+// Value noise as a texture. Sampling it at texel centres with a smoothstep-warped fraction gives exactly the classic
+// value noise, in one fetch instead of four sin() hashes. R holds G shifted by (37,17), so a single fetch also yields
+// the next Z layer for 3D noise.
+const noiseTex = (() => {
+  const N = 256, g = new Uint8Array(N * N), d = new Uint8Array(N * N * 4);
+  for (let i = 0; i < g.length; i++) g[i] = Math.random() * 256;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4;
+    d[i] = g[((y + 17) % N) * N + ((x + 37) % N)]; d[i + 1] = g[y * N + x]; d[i + 2] = 0; d[i + 3] = 255;
+  }
+  const t = new THREE.DataTexture(d, N, N, THREE.RGBAFormat); t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; t.needsUpdate = true; return t;
+})();
 const SUN_DIR = new V3(0.38, 0.8, 0.46).normalize();
 // A brooding, hazy sky: warped, drifting cumulus lit from the sun side with dark bellies, thin cirrus above,
 // a soft sun halo burning through the haze, and lightning that flickers inside the clouds.
 const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) } },
+  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) }, noiseTex: { value: noiseTex } },
   vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `varying vec3 vD; uniform vec3 sunDir; uniform float time; uniform float flash; uniform vec3 flashDir;
-    float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+    uniform sampler2D noiseTex;
     float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
-      return mix(mix(hash(i), hash(i+vec2(1,0)), u.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), u.x), u.y); }
+      return texture2D(noiseTex, (i + u + 0.5) / 256.0).g; }
     float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 6; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; }
     void main(){
       vec3 d = normalize(vD); float h = d.y;
@@ -124,14 +137,15 @@ const barrier = (() => {
   // light pulses stream along the veins, the whole skin slowly breathes, and it only shows in drifting patches.
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
-    uniforms: { time: { value: 0 }, hits: { value: hits } },
+    uniforms: { time: { value: 0 }, hits: { value: hits }, noiseTex: { value: noiseTex } },
     vertexShader: `varying vec3 vN; void main(){ vN = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `varying vec3 vN; uniform float time; uniform vec4 hits[${HITS}];
       float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       vec3 hash3(vec3 p){ return vec3(hash(p), hash(p + 31.7), hash(p + 71.3)); }
+      uniform sampler2D noiseTex;
       float noise(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x), mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
-                   mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x), mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z); }
+        vec2 rg = texture2D(noiseTex, (i.xy + vec2(37.0, 17.0) * i.z + f.xy + 0.5) / 256.0).yx;
+        return mix(rg.x, rg.y, f.z); }
       float fbm(vec3 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return v; }
       // soft cell walls: distance to the nearest two jittered seeds (smooth, like a membrane of cells)
       float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
@@ -141,7 +155,17 @@ const barrier = (() => {
         return d2 - d1; }
       void main(){
         vec3 n = normalize(vN); float t = time;
+        if (n.y < -0.03) discard;
         vec3 p = n * 4.0;
+        // the skin only surfaces in a few drifting patches; they swell, fade and wander so it is never visible everywhere
+        float pn = fbm(p * 0.38 + vec3(t * 0.02, -t * 0.03, t * 0.015)) + 0.12 * sin(t * 0.21 + n.x * 3.0);
+        float veil = smoothstep(0.56, 0.74, pn);
+        float base = exp(-max(n.y, 0.0) * 8.0) * smoothstep(0.45, 0.7, pn + 0.08); // thickest where it sinks into the land, also in patches
+        float vis = veil * 0.45 + base * 0.55;
+        // most of the dome is invisible most of the time: skip all the expensive vein work there unless a strike is near
+        float struck = 0.0;
+        for (int i = 0; i < ${HITS}; i++) { float age = hits[i].w; if (age < 3.0 && dot(n, hits[i].xyz) > cos(min(3.1, age * 0.3 + 0.6))) struck = 1.0; }
+        if (vis < 0.003 && struck < 0.5) discard;
         // domain warp that slowly evolves → everything streams and curls
         vec3 w = vec3(fbm(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
         vec3 q = p + (w - 0.5) * 3.2;
@@ -153,11 +177,6 @@ const barrier = (() => {
         float flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(dot(q, vec3(1.3, 2.1, 0.7)) * 2.2 - t * 1.6), 3.0);
         float memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35;      // faint walls of the cells
         float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
-        // the skin only surfaces in a few drifting patches; they swell, fade and wander so it is never visible everywhere
-        float pn = fbm(p * 0.38 + vec3(t * 0.02, -t * 0.03, t * 0.015)) + 0.12 * sin(t * 0.21 + n.x * 3.0);
-        float veil = smoothstep(0.56, 0.74, pn);
-        float base = exp(-max(n.y, 0.0) * 8.0) * smoothstep(0.45, 0.7, pn + 0.08); // thickest where it sinks into the land, also in patches
-        float vis = veil * 0.45 + base * 0.55;
         float I = (veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe;
         for (int i = 0; i < ${HITS}; i++) {
           float age = hits[i].w; if (age > 3.0) continue;
@@ -564,14 +583,25 @@ const metalRough = (() => {
     for (let i = 0; i < p.count; i++) p.setY(i, groundH(x + p.getX(i), z + p.getZ(i)) + lift);
     geo.computeVertexNormals(); return geo;
   };
+  const layers = new Map(); // stains sharing a texture are merged into a single mesh
   const decal = (geo, tex, rough, x, z, order) => {
-    const m = new THREE.Mesh(geo, std(0xffffff, rough, 0, { map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 - order, polygonOffsetUnits: -1 }));
-    m.position.set(x, 0, z); m.rotation.y = rand(0, 6.28); m.receiveShadow = true; m.renderOrder = order; scene.add(m);
+    const uv = geo.attributes.uv, q = rand(0, 6.28), cs = Math.cos(q), sn = Math.sin(q); // spin the stain, not the draped disc
+    for (let i = 0; i < uv.count; i++) { const u = uv.getX(i) - 0.5, v = uv.getY(i) - 0.5; uv.setXY(i, 0.5 + u * cs - v * sn, 0.5 + u * sn + v * cs); }
+    geo.translate(x, 0, z);
+    if (!layers.has(tex)) layers.set(tex, { rough, order, geos: [] });
+    layers.get(tex).geos.push(geo);
   };
+  const flushDecals = () => {
+    for (const [tex, { rough, order, geos }] of layers) {
+      const m = new THREE.Mesh(mergeGeometries(geos), std(0xffffff, rough, 0, { map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 - order, polygonOffsetUnits: -1 }));
+      m.receiveShadow = true; m.renderOrder = order; scene.add(m);
+    }
+  };
+  const pools = [];
   const wetTex = blot('26,19,12', 40, 0.6), mudTex = blot('38,30,20', 30, 0.5), oldBlood = blot('48,12,8', 26, 0.35);
   // puddles: a flat sheet of water at a level between the lowest and the average ground in its patch, so it only
   // shows where the sand dips; ragged natural shorelines come from the terrain cutting through it
-  const waterM = phys(0x090705, 0.08, 0, { clearcoat: 1, clearcoatRoughness: 0.06, transparent: true, opacity: 0.93, envMapIntensity: 0.6, specularIntensity: 0.6, specularColor: COLD_SPEC });
+  const waterM = phys(0x14110d, 0.06, 0, { clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, opacity: 0.88, envMapIntensity: 1.1, specularColor: COLD_SPEC });
   for (const [a, r, R] of [[0.6, 7, 1.3], [2.4, 11, 1.0], [-1.9, 5, 1.6], [-0.4, 13.5, 0.9], [3.6, 9, 1.2], [1.6, 3, 0.8]]) {
     const x = Math.sin(a) * r, z = Math.cos(a) * r;
     let sum = 0, n = 0, lo = 1e9;
@@ -580,11 +610,13 @@ const metalRough = (() => {
     const geo = new THREE.CircleGeometry(R, 48); geo.rotateX(-Math.PI / 2);
     const p = geo.attributes.position;
     for (let i = 1; i < p.count; i++) { const k = 1 + 0.25 * Math.sin(Math.atan2(p.getZ(i), p.getX(i)) * 3 + a) + 0.12 * Math.sin(i * 1.7); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
-    const w = new THREE.Mesh(geo, waterM); w.position.set(x, level, z); w.receiveShadow = true; scene.add(w);
+    geo.translate(x, level, z); pools.push(geo);
     decal(drape(x, z, R * 1.9, 0.006), wetTex, 0.45, x, z, 1); // dark, damp sand around it
   }
   for (let i = 0; i < 9; i++) { const a = rand(0, 6.28), r = rand(2, 15), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(1.2, 2.6), 0.005), mudTex, 0.85, x, z, 0); }
   for (let i = 0; i < 10; i++) { const a = rand(0, 6.28), r = rand(1, 14), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(0.4, 1.0), 0.007), oldBlood, 0.6, x, z, 2); }
+  flushDecals();
+  { const w = new THREE.Mesh(mergeGeometries(pools), waterM); w.receiveShadow = true; scene.add(w); }
 
   // arrows from earlier bouts: stuck in the sand, lying broken, and buried in the palisade logs
   const arrows = new THREE.Group();
@@ -690,9 +722,10 @@ const metalRough = (() => {
   beams.castShadow = beams.receiveShadow = true; scene.add(beams);
 
   // raised portcullis under the gatehouse lintel
-  for (let i = -5; i <= 5; i++) mesh(new THREE.BoxGeometry(0.1, 2.0, 0.1), rustM, scene, [i * 0.42, 5.4, -R - 0.1]);
-  for (const y of [4.65, 5.5]) mesh(new THREE.BoxGeometry(4.6, 0.1, 0.12), rustM, scene, [0, y, -R - 0.1]);
-  for (let i = -5; i <= 5; i++) mesh(cone(0.07, 0.25, 4), rustM, scene, [i * 0.42, 4.3, -R - 0.1], [Math.PI, 0, 0]);
+  const fixtures = new THREE.Group();
+  for (let i = -5; i <= 5; i++) mesh(new THREE.BoxGeometry(0.1, 2.0, 0.1), rustM, fixtures, [i * 0.42, 5.4, -R - 0.1]);
+  for (const y of [4.65, 5.5]) mesh(new THREE.BoxGeometry(4.6, 0.1, 0.12), rustM, fixtures, [0, y, -R - 0.1]);
+  for (let i = -5; i <= 5; i++) mesh(cone(0.07, 0.25, 4), rustM, fixtures, [i * 0.42, 4.3, -R - 0.1], [Math.PI, 0, 0]);
   // a dark pen beyond the gate
   const pen = mesh(new THREE.BoxGeometry(5, 6, 8), std(0x0d0806, 1), scene, [0, 3, -R - 4.4]);
   pen.material.side = THREE.BackSide;
@@ -702,10 +735,11 @@ const metalRough = (() => {
     const a = (i / 44) * Math.PI * 2;
     if (Math.abs(angWrap(a - Math.PI)) < 0.4) continue;
     for (const [r, y] of STAND_TIERS) {
-      mesh(new THREE.BoxGeometry(2.9, 0.22, 1.4), darkWood, scene, [Math.sin(a) * r, y, Math.cos(a) * r], [0, a, 0]);
-      mesh(new THREE.BoxGeometry(0.18, y, 0.18), darkWood, scene, [Math.sin(a) * (r + 0.5), y / 2, Math.cos(a) * (r + 0.5)]);
+      mesh(new THREE.BoxGeometry(2.9, 0.22, 1.4), darkWood, fixtures, [Math.sin(a) * r, y, Math.cos(a) * r], [0, a, 0]);
+      mesh(new THREE.BoxGeometry(0.18, y, 0.18), darkWood, fixtures, [Math.sin(a) * (r + 0.5), y / 2, Math.cos(a) * (r + 0.5)]);
     }
   }
+  bakeStatic(fixtures);
 })();
 
 // ============================================================ the town, city wall and castle
@@ -1092,7 +1126,7 @@ function buildTown() {
   }
   bakeStatic(tmp);
 }
-// merge all static town geometry by material → a handful of draw calls
+// merge all static geometry by material and region → few draw calls, and only for what is actually in view
 function bakeStatic(group) {
   group.updateMatrixWorld(true);
   const bins = new Map();
@@ -1112,12 +1146,17 @@ function bakeStatic(group) {
         uv.setXY(i, u / ws, v / ws);
       }
     }
-    if (!bins.has(o.material)) bins.set(o.material, []);
-    bins.get(o.material).push(g);
+    // region = ring around the arena × compass sector. Each region is its own mesh with a tight bounding sphere, so the
+    // camera skips whatever is behind it and the shadow pass skips everything that cannot shade the arena.
+    g.computeBoundingBox(); const c = g.boundingBox.getCenter(new V3()), r = Math.hypot(c.x, c.z);
+    const ring = r < 24 ? 0 : r < 33 ? 1 : r < 43 ? 2 : r < 56 ? 3 : r < 80 ? 4 : 5, sectors = ring ? 8 : 6;
+    const key = o.material.uuid + ':' + ring + ':' + Math.min(sectors - 1, Math.floor((Math.atan2(c.x, c.z) + Math.PI) / (Math.PI * 2) * sectors));
+    if (!bins.has(key)) bins.set(key, { mat: o.material, arr: [] });
+    bins.get(key).arr.push(g);
   });
-  for (const [mat, arr] of bins) {
+  for (const { mat, arr } of bins.values()) {
     const m = new THREE.Mesh(mergeGeometries(arr), mat);
-    m.castShadow = true; m.receiveShadow = true; m.frustumCulled = false;
+    m.castShadow = true; m.receiveShadow = true;
     scene.add(m);
   }
 }
@@ -1126,6 +1165,7 @@ function bakeStatic(group) {
 // props scattered around the edge
 const banners = [];
 (function props() {
+  const fixed = new THREE.Group();
   const crateTex = canvasTex(128, (g, s) => {
     g.fillStyle = '#45311f'; g.fillRect(0, 0, s, s);
     g.strokeStyle = '#1a1008'; g.lineWidth = 8; g.strokeRect(4, 4, s - 8, s - 8);
@@ -1137,12 +1177,12 @@ const banners = [];
   const spots = [[0.75, 1], [0.82, 0.8], [2.3, 1.1], [-0.9, 0.9], [-2.2, 1], [-2.3, 0.75], [1.6, 0.85]];
   for (const [a, s] of spots) {
     const r = 16.9;
-    mesh(new THREE.BoxGeometry(s, s, s), crateMat, scene, [Math.sin(a) * r, s / 2, Math.cos(a) * r], [0, rand(0, 3), 0]);
+    mesh(new THREE.BoxGeometry(s, s, s), crateMat, fixed, [Math.sin(a) * r, s / 2, Math.cos(a) * r], [0, rand(0, 3), 0]);
   }
   const barrelMat = surfMat(woodTex, 0.9, 2.5, 0, { color: 0x9a8070 });
   for (const a of [0.55, -1.4, 2.0, -2.75]) {
     const r = 17.0;
-    const b = mesh(new THREE.CylinderGeometry(0.42, 0.42, 1.1, 14), barrelMat, scene, [Math.sin(a) * r, 0.55, Math.cos(a) * r]);
+    const b = mesh(new THREE.CylinderGeometry(0.42, 0.42, 1.1, 14), barrelMat, fixed, [Math.sin(a) * r, 0.55, Math.cos(a) * r]);
     mesh(new THREE.TorusGeometry(0.43, 0.03, 6, 18), rustM, b, [0, 0.35, 0], [Math.PI / 2, 0, 0]);
     mesh(new THREE.TorusGeometry(0.43, 0.03, 6, 18), rustM, b, [0, -0.35, 0], [Math.PI / 2, 0, 0]);
   }
@@ -1150,16 +1190,17 @@ const banners = [];
   const boneMat = std(0xa89c82, 0.85);
   for (let i = 0; i < 18; i++) {
     const a = rand(0, 6.28), r = rand(4, 16);
-    mesh(new THREE.CylinderGeometry(0.04, 0.05, rand(0.4, 0.9), 6), boneMat, scene, [Math.sin(a) * r, groundH(Math.sin(a) * r, Math.cos(a) * r) + 0.03, Math.cos(a) * r], [Math.PI / 2, 0, rand(0, 3)]);
+    mesh(new THREE.CylinderGeometry(0.04, 0.05, rand(0.4, 0.9), 6), boneMat, fixed, [Math.sin(a) * r, groundH(Math.sin(a) * r, Math.cos(a) * r) + 0.03, Math.cos(a) * r], [Math.PI / 2, 0, rand(0, 3)]);
   }
   // banners
   const clothMat = std(0x5a1812, 0.97, 0, { side: THREE.DoubleSide });
   for (const a of [Math.PI + 0.55, Math.PI - 0.55, 0.0]) {
     const r = 18.0;
-    mesh(new THREE.CylinderGeometry(0.06, 0.06, 7.5, 6), darkWood, scene, [Math.sin(a) * r, 3.75, Math.cos(a) * r]);
+    mesh(new THREE.CylinderGeometry(0.06, 0.06, 7.5, 6), darkWood, fixed, [Math.sin(a) * r, 3.75, Math.cos(a) * r]);
     const cloth = mesh(new THREE.PlaneGeometry(1.1, 2.4, 4, 8), clothMat, scene, [Math.sin(a) * (r - 0.05), 5.9, Math.cos(a) * (r - 0.05)], [0, a + Math.PI, 0]);
     banners.push({ m: cloth, base: cloth.geometry.attributes.position.array.slice(), ph: rand(0, 6) });
   }
+  bakeStatic(fixed);
 })();
 
 // ============================================================ particles
@@ -1202,8 +1243,10 @@ class Particles {
     this.grav[i] = grav; this.drag[i] = drag; this.grow[i] = grow; this.flag[i] = flag;
   }
   update(dt) {
+    let alive = false;
     for (let i = 0; i < this.max; i++) {
       if (this.life[i] <= 0) continue;
+      alive = true;
       this.life[i] -= dt;
       if (this.life[i] <= 0) { this.alpha[i] = 0; this.size[i] = 0; continue; }
       const i3 = i * 3, dr = Math.exp(-this.drag[i] * dt);
@@ -1220,7 +1263,8 @@ class Particles {
       this.alpha[i] = this.a0[i] * Math.min(1, k * 1.6);
       this.size[i] = Math.max(0, this.size[i] + this.grow[i] * dt);
     }
-    for (const n of ['position', 'pcolor', 'alpha', 'psize']) this.geo.attributes[n].needsUpdate = true;
+    if (alive || this.wasAlive) for (const n of ['position', 'pcolor', 'alpha', 'psize']) this.geo.attributes[n].needsUpdate = true;
+    this.wasAlive = alive;
   }
 }
 const fxAdd = new Particles(1800, true);   // fire, sparks, embers
@@ -1311,11 +1355,11 @@ const trail = new Trail();
 const torches = [];
 (function buildTorches() {
   const angles = [0.4, 1.15, 1.95, 2.6, -0.4, -1.15, -1.95, -2.6];
-  const postMat = darkWood, ironMat = rustM;
+  const postMat = darkWood, ironMat = rustM, torchPosts = new THREE.Group();
   angles.forEach((a, i) => {
     const r = 17.5, x = Math.sin(a) * r, z = Math.cos(a) * r;
-    mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.7, 7), postMat, scene, [x, 1.35, z]);
-    mesh(new THREE.CylinderGeometry(0.22, 0.1, 0.25, 10, 1, true), ironMat, scene, [x, 2.78, z]);
+    mesh(new THREE.CylinderGeometry(0.08, 0.1, 2.7, 7), postMat, torchPosts, [x, 1.35, z]);
+    mesh(new THREE.CylinderGeometry(0.22, 0.1, 0.25, 10, 1, true), ironMat, torchPosts, [x, 2.78, z]);
     const t = { p: new V3(x, 2.95, z), acc: 0, seed: rand(0, 100), light: null };
     if (i % 2 === 0) {
       t.light = new THREE.PointLight(0xff8a3c, 10, 12, 1.7);
@@ -1324,6 +1368,7 @@ const torches = [];
     }
     torches.push(t);
   });
+  bakeStatic(torchPosts);
 })();
 function updateTorches(dt, time) {
   for (const t of torches) {
@@ -2629,11 +2674,36 @@ function updateBanners() {
     pos.needsUpdate = true;
   }
 }
+// ---- depth pre-pass
+// Almost all of the frame time is pixel shading (lit, shadowed, environment-mapped materials, plus the sky and barrier
+// shaders). Without help, a pixel is often shaded several times — a far house, then the stands, then the palisade in
+// front of it — and the costly sky is shaded behind everything. So each frame first lays down depth for every opaque
+// surface with a trivial colourless shader, and only then renders for real: the depth test now rejects every hidden
+// fragment before its shader runs, so each pixel is shaded exactly once. The picture is identical.
+const depthMats = [THREE.FrontSide, THREE.BackSide, THREE.DoubleSide].map(side =>
+  new THREE.MeshBasicMaterial({ colorWrite: false, side, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2 })); // nudged back so the real pass always wins ties
+renderer.shadowMap.autoUpdate = false; // the frame is rendered in two passes; the shadow map only needs one update
+const prepassed = [];
+function drawFrame() {
+  prepassed.length = 0;
+  scene.traverse(o => {
+    if (!o.isMesh && !o.isPoints && !o.isLine) return;
+    const m = o.material;
+    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
+    else o.layers.set(1); // transparent things, particles, lightning, sky, barrier: main pass only
+  });
+  camera.layers.set(0);
+  renderer.render(scene, camera);
+  for (let i = 0; i < prepassed.length; i += 2) prepassed[i].material = prepassed[i + 1];
+  camera.layers.enable(1);
+  renderer.shadowMap.needsUpdate = true;
+  renderer.autoClear = false; renderer.render(scene, camera); renderer.autoClear = true;
+}
 function loop(now) {
   requestAnimationFrame(loop);
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   let dt = rdt;
-  if (paused) { renderer.render(scene, camera); pressed.clear(); return; }
+  if (paused) { drawFrame(); pressed.clear(); return; }
   if (hitStop > 0) { hitStop -= rdt; dt *= 0.06; }
   else if (slowMo > 0) { slowMo -= rdt; dt *= 0.35; }
   time += dt;
@@ -2661,7 +2731,7 @@ function loop(now) {
   updateCamera(rdt);
   sky.position.copy(camera.position);
   updateHUD(rdt); updatePops(rdt);
-  renderer.render(scene, camera);
+  drawFrame();
   pressed.clear();
 }
 SFX.crackle = () => nz({ dur: 0.03, type: 'highpass', f0: 2200, f1: 3200, gain: rand(0.01, 0.04) });
