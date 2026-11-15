@@ -338,8 +338,10 @@ const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(
 const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 140, grains: 9000, strength: 3.2, contrast: 1.5, dark: [78, 60, 40], light: [150, 124, 92], repeat: 7 });
 terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
   const m = macro(x, z, 1), r = Math.hypot(x, z), trodden = Math.exp(-r * r / 60) * 0.12;
-  const v = 0.78 + m * 0.3 - trodden + (r > 16 ? 0.06 : 0);
-  return [v * 1.02, v, v * 0.95];
+  const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.5;  // churned, darker mud
+  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.22;                                      // trodden filth along the wall
+  const v = (0.74 + m * 0.3 - trodden) * (1 - mud - grime);
+  return [v * 1.02, v * (1 - mud * 0.05), v * (0.94 - mud * 0.06)];
 });
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
 terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
@@ -399,11 +401,8 @@ function weather(g, s, o = {}) {
   }
 }
 // a canvas colour map that doubles as its own bump map — dark seams and cracks read as recessed
-// stone and slate: the same, plus a faint, cold specular sheen that glints off the worn faces in the sun
+// the faint, cold specular tint that stone, slate and wet surfaces glint with in the sun
 const COLD_SPEC = new THREE.Color(0xbcd2ff);
-function glintMat(tex, rough, bump, extra = {}) {
-  return phys(0xffffff, rough, 0, { map: tex, bumpMap: tex, bumpScale: bump, specularColor: COLD_SPEC, specularIntensity: 1, ...extra });
-}
 function surfMat(tex, rough = 0.92, bump = 2, metal = 0, extra = {}) {
   return std(0xffffff, rough, metal, { map: tex, bumpMap: tex, bumpScale: bump, ...extra });
 }
@@ -440,25 +439,193 @@ const rustTex = canvasTex(128, (g, s) => {
 });
 const rustM = surfMat(rustTex, 0.88, 3, 0.3);
 
-// dark, mossy, soot-streaked masonry — shared by the arena wall and the town
-const stoneTex = canvasTex(256, (g, s) => {
-  g.fillStyle = '#26231f'; g.fillRect(0, 0, s, s); // deep mortar joints
-  const rows = 8, h = s / rows;
+// ---- texture-set helpers: a height field becomes a normal map; a grey canvas becomes a roughness map
+function heightToNormal(H, size, strength) {
+  const nc = document.createElement('canvas'); nc.width = nc.height = size;
+  const img = nc.getContext('2d').createImageData(size, size), d = img.data;
+  const h = (x, y) => H[((((y % size) + size) % size) * size + (((x % size) + size) % size)) * 4] / 255;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let nx = -(h(x + 1, y) - h(x - 1, y)) * strength, ny = (h(x, y + 1) - h(x, y - 1)) * strength, nz = 1;
+    const l = Math.hypot(nx, ny, nz), i = (y * size + x) * 4;
+    d[i] = (nx / l * 0.5 + 0.5) * 255; d[i + 1] = (ny / l * 0.5 + 0.5) * 255; d[i + 2] = (nz / l * 0.5 + 0.5) * 255; d[i + 3] = 255;
+  }
+  nc.getContext('2d').putImageData(img, 0, 0); return nc;
+}
+function dataTex(canvas, like) {
+  const t = new THREE.CanvasTexture(canvas); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8;
+  if (like) t.repeat.copy(like.repeat); return t;
+}
+// For a tiled colour texture (roof tiles): luminance stands in for height, dark gaps are matte,
+// the faces of the tiles get a varied, slightly glossy finish.
+function deriveMaps(tex, faceRough, strength = 6) {
+  const src = tex.image, size = src.width, C = src.getContext('2d').getImageData(0, 0, size, size).data;
+  const hc = document.createElement('canvas'), rc = document.createElement('canvas'); hc.width = hc.height = rc.width = rc.height = size;
+  const hi = hc.getContext('2d').createImageData(size, size), ri = rc.getContext('2d').createImageData(size, size);
+  for (let i = 0; i < C.length; i += 4) {
+    const lum = (C[i] * 0.3 + C[i + 1] * 0.59 + C[i + 2] * 0.11) / 255;
+    hi.data[i] = hi.data[i + 1] = hi.data[i + 2] = Math.min(255, lum * 600); hi.data[i + 3] = 255;
+    const r = lum < 0.07 ? 0.97 : clamp(faceRough + (0.2 - lum) * 0.9 + (Math.random() - 0.5) * 0.1 + (C[i + 1] > C[i] + 4 ? 0.25 : 0), 0.15, 1);
+    ri.data[i] = ri.data[i + 1] = ri.data[i + 2] = r * 255; ri.data[i + 3] = 255;
+  }
+  hc.getContext('2d').putImageData(hi, 0, 0); rc.getContext('2d').putImageData(ri, 0, 0);
+  const g = hc.getContext('2d'); g.filter = 'blur(1px)'; g.drawImage(hc, 0, 0); g.filter = 'none';
+  return { normalMap: dataTex(heightToNormal(g.getImageData(0, 0, size, size).data, size, strength), tex), roughnessMap: dataTex(rc, tex) };
+}
+
+// dark, mossy, soot-streaked masonry — shared by the arena wall and the town.
+// Built as a matched set: colour, a height field (→ normal map: sunken mortar, bevelled block edges, chips)
+// and a roughness map (dead-matte mortar, each block its own sheen, slick wet streaks, matte moss).
+const stoneMaps = (() => {
+  const s = 512, rows = 8, rh = s / rows;
+  const mk = () => { const c = document.createElement('canvas'); c.width = c.height = s; return [c, c.getContext('2d')]; };
+  const [cc, g] = mk(), [hc, hg] = mk(), [rc, rg] = mk();
+  g.fillStyle = '#24211d'; g.fillRect(0, 0, s, s);
+  hg.fillStyle = 'rgb(30,30,30)'; hg.fillRect(0, 0, s, s);
+  rg.fillStyle = 'rgb(248,248,248)'; rg.fillRect(0, 0, s, s);
   for (let r = 0; r < rows; r++) {
-    let x = (r % 2) * -18;
-    while (x < s) {
-      const w = rand(24, 46), v = rand(50, 82) | 0, warm = rand(0, 10) | 0;
-      g.fillStyle = `rgb(${v + warm + 4},${v},${v - 10 - warm})`; g.fillRect(x + 2, r * h + 2, w - 3, h - 3);
-      const gr = g.createLinearGradient(0, r * h, 0, r * h + h); // worn, rounded faces
-      gr.addColorStop(0, 'rgba(255,245,230,.08)'); gr.addColorStop(1, 'rgba(0,0,0,.28)');
-      g.fillStyle = gr; g.fillRect(x + 2, r * h + 2, w - 3, h - 3);
-      for (let k = 0; k < 2; k++) { g.fillStyle = 'rgba(20,18,15,.35)'; g.beginPath(); g.arc(x + rand(4, w - 4), r * h + (Math.random() < .5 ? 3 : h - 3), rand(1.5, 3.5), 0, 7); g.fill(); } // chipped arrises
+    const ws = []; let tot = 0; while (tot < s - 40) { const w = rand(48, 92); ws.push(w); tot += w; }
+    const k = s / tot, off = rand(0, s); let x = 0;
+    for (const w0 of ws) {
+      const w = w0 * k, y = r * rh;
+      const v = rand(50, 82) | 0, warm = rand(0, 10) | 0, hv = rand(160, 215) | 0, rv = rand(0.42, 0.78);
+      for (const ox of [0, -s]) {
+        const X = ((x + off) % s) + ox;
+        g.fillStyle = `rgb(${v + warm + 4},${v},${v - 10 - warm})`; g.fillRect(X + 3, y + 3, w - 5, rh - 5);
+        const gr = g.createLinearGradient(0, y, 0, y + rh); gr.addColorStop(0, 'rgba(255,245,230,.08)'); gr.addColorStop(1, 'rgba(0,0,0,.28)');
+        g.fillStyle = gr; g.fillRect(X + 3, y + 3, w - 5, rh - 5);
+        // height: a raised face with softened, bevelled arrises
+        hg.fillStyle = `rgb(${hv * 0.7 | 0},${hv * 0.7 | 0},${hv * 0.7 | 0})`; hg.fillRect(X + 3, y + 3, w - 5, rh - 5);
+        hg.fillStyle = `rgb(${hv},${hv},${hv})`; hg.fillRect(X + 7, y + 7, w - 13, rh - 13);
+        rg.fillStyle = `rgb(${rv * 255 | 0},${rv * 255 | 0},${rv * 255 | 0})`; rg.fillRect(X + 3, y + 3, w - 5, rh - 5);
+        for (let c = 0; c < 4; c++) { // chipped edges: dark in colour, sunken in height, rough
+          const cx = X + rand(6, w - 6), cy = y + (Math.random() < 0.5 ? rand(3, 8) : rh - rand(3, 8)), cr = rand(2, 6);
+          g.fillStyle = 'rgba(20,18,15,.45)'; g.beginPath(); g.arc(cx, cy, cr, 0, 7); g.fill();
+          hg.fillStyle = 'rgba(40,40,40,.85)'; hg.beginPath(); hg.arc(cx, cy, cr, 0, 7); hg.fill();
+          rg.fillStyle = 'rgba(240,240,240,.9)'; rg.beginPath(); rg.arc(cx, cy, cr, 0, 7); rg.fill();
+        }
+        for (let c = 0; c < 18; c++) { // pitting and tool marks on the faces
+          const px = X + rand(6, w - 6), py = y + rand(6, rh - 6), pr = rand(0.8, 2.5), dv = rand(-35, 25);
+          hg.fillStyle = `rgba(${dv < 0 ? '0,0,0' : '255,255,255'},${Math.abs(dv) / 100})`; hg.beginPath(); hg.arc(px, py, pr, 0, 7); hg.fill();
+        }
+      }
       x += w;
     }
   }
-  weather(g, s, { streaks: 26, streakA: 0.3, damp: 0.4, dampA: 0.45, blotches: 30, moss: 0.55, grit: 3000 });
-});
-const stoneM = glintMat(stoneTex, 0.66, 3); stoneM.userData.world = 3.5;
+  weather(g, s, { streaks: 34, streakA: 0.3, damp: 0.4, dampA: 0.45, blotches: 46, moss: 0.55, grit: 3000 });
+  hg.filter = 'blur(1.2px)'; hg.drawImage(hc, 0, 0); hg.filter = 'none';
+  // roughness follows the weathering: dark, wet streaks are slick, moss and grime are matte
+  const C = g.getImageData(0, 0, s, s).data, R = rg.getImageData(0, 0, s, s), Hd = hg.getImageData(0, 0, s, s).data;
+  for (let i = 0; i < C.length; i += 4) {
+    if (Hd[i] < 60) continue; // mortar stays dead matte
+    const lum = (C[i] * 0.3 + C[i + 1] * 0.59 + C[i + 2] * 0.11) / 255, moss = C[i + 1] > C[i] + 3 ? 0.3 : 0;
+    const r = clamp(R.data[i] / 255 - (0.26 - lum) * 1.4 + moss + (Math.random() - 0.5) * 0.08, 0.18, 1) * 255;
+    R.data[i] = R.data[i + 1] = R.data[i + 2] = r;
+  }
+  rg.putImageData(R, 0, 0);
+  const map = dataTex(cc); map.colorSpace = THREE.SRGBColorSpace;
+  return { map, normalMap: dataTex(heightToNormal(Hd, s, 7)), roughnessMap: dataTex(rc) };
+})();
+const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: COLD_SPEC, specularIntensity: 1 });
+stoneM.userData.world = 3.5;
+
+// worn steel: brushed grain, fine bright scratches, dull smudges and pits — a roughness texture so reflections
+// on the hero's armour break up across the surface instead of sliding over it like a mirror
+const metalRough = (() => {
+  const s = 256, c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d');
+  g.fillStyle = 'rgb(115,115,115)'; g.fillRect(0, 0, s, s);
+  for (let i = 0; i < 260; i++) { const y = rand(0, s), v = Math.random() < 0.5 ? '0,0,0' : '255,255,255'; g.fillStyle = `rgba(${v},${rand(0.03, 0.09)})`; g.fillRect(0, y, s, rand(0.5, 1.5)); } // brushing
+  for (let i = 0; i < 40; i++) { // smudges and handling marks: rougher
+    const x = rand(0, s), y = rand(0, s), r = rand(8, 34), gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, `rgba(255,255,255,${rand(0.1, 0.3)})`); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (let i = 0; i < 90; i++) { // scratches: burnished, so smoother
+    g.strokeStyle = `rgba(0,0,0,${rand(0.25, 0.6)})`; g.lineWidth = rand(0.5, 1.2);
+    const x = rand(0, s), y = rand(0, s), a = rand(0, Math.PI), l = rand(10, 60);
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+  for (let i = 0; i < 500; i++) { g.fillStyle = `rgba(255,255,255,${rand(0.2, 0.5)})`; g.fillRect(rand(0, s), rand(0, s), rand(1, 2.2), rand(1, 2.2)); } // pits
+  return dataTex(c);
+})();
+
+// ---- a used arena floor: puddles in the hollows, old stains, arrows stuck in the sand and the palisade, straw
+{
+  const blot = (col, n, soft) => { // irregular, soft-edged splotch with alpha
+    const s = 256, c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d');
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, 6.28), d = Math.pow(Math.random(), 0.7) * s * 0.3, x = s / 2 + Math.cos(a) * d, y = s / 2 + Math.sin(a) * d, r = rand(10, 46) * (1 - d / (s * 0.5));
+      const gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgba(${col},${rand(0.25, 0.55)})`); gr.addColorStop(soft, `rgba(${col},${rand(0.1, 0.3)})`); gr.addColorStop(1, `rgba(${col},0)`);
+      g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  };
+  const drape = (x, z, R, lift) => { // a ground-hugging disc
+    const geo = new THREE.RingGeometry(0, R, 40, 8); geo.rotateX(-Math.PI / 2);
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setY(i, groundH(x + p.getX(i), z + p.getZ(i)) + lift);
+    geo.computeVertexNormals(); return geo;
+  };
+  const decal = (geo, tex, rough, x, z, order) => {
+    const m = new THREE.Mesh(geo, std(0xffffff, rough, 0, { map: tex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 - order, polygonOffsetUnits: -1 }));
+    m.position.set(x, 0, z); m.rotation.y = rand(0, 6.28); m.receiveShadow = true; m.renderOrder = order; scene.add(m);
+  };
+  const wetTex = blot('26,19,12', 40, 0.6), mudTex = blot('38,30,20', 30, 0.5), oldBlood = blot('48,12,8', 26, 0.35);
+  // puddles: a flat sheet of water at a level between the lowest and the average ground in its patch, so it only
+  // shows where the sand dips; ragged natural shorelines come from the terrain cutting through it
+  const waterM = phys(0x090705, 0.08, 0, { clearcoat: 1, clearcoatRoughness: 0.06, transparent: true, opacity: 0.93, envMapIntensity: 0.6, specularIntensity: 0.6, specularColor: COLD_SPEC });
+  for (const [a, r, R] of [[0.6, 7, 1.3], [2.4, 11, 1.0], [-1.9, 5, 1.6], [-0.4, 13.5, 0.9], [3.6, 9, 1.2], [1.6, 3, 0.8]]) {
+    const x = Math.sin(a) * r, z = Math.cos(a) * r;
+    let sum = 0, n = 0, lo = 1e9;
+    for (let i = 0; i < 60; i++) { const q = rand(0, 6.28), d = Math.sqrt(Math.random()) * R, h = groundH(x + Math.cos(q) * d, z + Math.sin(q) * d); sum += h; n++; lo = Math.min(lo, h); }
+    const level = lerp(lo, sum / n, 0.85) + 0.004;
+    const geo = new THREE.CircleGeometry(R, 48); geo.rotateX(-Math.PI / 2);
+    const p = geo.attributes.position;
+    for (let i = 1; i < p.count; i++) { const k = 1 + 0.25 * Math.sin(Math.atan2(p.getZ(i), p.getX(i)) * 3 + a) + 0.12 * Math.sin(i * 1.7); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
+    const w = new THREE.Mesh(geo, waterM); w.position.set(x, level, z); w.receiveShadow = true; scene.add(w);
+    decal(drape(x, z, R * 1.9, 0.006), wetTex, 0.45, x, z, 1); // dark, damp sand around it
+  }
+  for (let i = 0; i < 9; i++) { const a = rand(0, 6.28), r = rand(2, 15), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(1.2, 2.6), 0.005), mudTex, 0.85, x, z, 0); }
+  for (let i = 0; i < 10; i++) { const a = rand(0, 6.28), r = rand(1, 14), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(0.4, 1.0), 0.007), oldBlood, 0.6, x, z, 2); }
+
+  // arrows from earlier bouts: stuck in the sand, lying broken, and buried in the palisade logs
+  const arrows = new THREE.Group();
+  const shaftM = surfMat(woodTex, 0.85, 1, 0, { color: 0xc0a888 }), fletchM = std(0x9a9284, 0.95, 0, { side: THREE.DoubleSide });
+  const shaftG = new THREE.CylinderGeometry(0.0055, 0.0055, 1, 5), headG = new THREE.ConeGeometry(0.011, 0.055, 4), vaneG = new THREE.PlaneGeometry(0.022, 0.12);
+  function arrow(tip, dir, len = 0.72, fletched = true, head = true) {
+    const g = new THREE.Group(); g.position.copy(tip); g.quaternion.setFromUnitVectors(UP, dir.clone().normalize()); arrows.add(g);
+    mesh(shaftG, shaftM, g, [0, -len / 2 - 0.045, 0], [0, 0, 0], [1, len - 0.09, 1]);
+    if (head) mesh(headG, rustM, g, [0, -0.0275, 0]);
+    if (fletched) for (let k = 0; k < 3; k++) { const q = k * 2.094; mesh(vaneG, fletchM, g, [Math.sin(q) * 0.012, -len + 0.09, Math.cos(q) * 0.012], [0, q, 0]); }
+  }
+  const STONE = [[0.85, 1.8], [-1.8, -0.85]];
+  for (let i = 0; i < 26; i++) { // stuck in the sand, tails up
+    const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 16, x = Math.sin(a) * r, z = Math.cos(a) * r;
+    const dir = new V3(rand(-0.7, 0.7), -1, rand(-0.7, 0.7)).normalize(), depth = rand(0.1, 0.25);
+    arrow(new V3(x, groundH(x, z), z).addScaledVector(dir, depth), dir, rand(0.6, 0.75), Math.random() < 0.8);
+  }
+  for (let i = 0; i < 16; i++) { // lying flat, some snapped
+    const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 16.5, x = Math.sin(a) * r, z = Math.cos(a) * r, q = rand(0, 6.28);
+    const broken = Math.random() < 0.45, dir = new V3(Math.cos(q), 0.03, Math.sin(q));
+    arrow(new V3(x, groundH(x, z) + 0.008, z), dir, broken ? rand(0.25, 0.45) : 0.72, !broken);
+    if (broken) arrow(new V3(x - Math.cos(q) * rand(0.5, 1), groundH(x, z) + 0.008, z - Math.sin(q) * rand(0.5, 1)), new V3(Math.cos(q + rand(-1, 1)), 0.03, Math.sin(q + rand(-1, 1))), rand(0.25, 0.4), true, false);
+  }
+  for (let i = 0; i < 18; i++) { // buried in the palisade
+    const a = rand(0, 6.28);
+    if (Math.abs(angWrap(a - Math.PI)) < 0.3 || STONE.some(([lo, hi]) => angWrap(a) >= lo - 0.05 && angWrap(a) <= hi + 0.05)) continue;
+    const dir = new V3(Math.sin(a) + rand(-0.25, 0.25), rand(-0.25, 0.15), Math.cos(a) + rand(-0.25, 0.25)).normalize();
+    arrow(new V3(Math.sin(a) * 18.42, rand(1.0, 4.0), Math.cos(a) * 18.42), dir, 0.72, true);
+  }
+  bakeStatic(arrows);
+
+  // loose straw trodden into the sand, thicker near the walls and the gate
+  const n = 900, straw = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.012, 0.2), std(0xffffff, 0.95, 0, { side: THREE.DoubleSide }), n);
+  const d = new THREE.Object3D(), c = new THREE.Color();
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, 6.28), r = Math.random() < 0.6 ? rand(13, 17.6) : Math.sqrt(Math.random()) * 17, x = Math.sin(a) * r, z = Math.cos(a) * r;
+    d.position.set(x, groundH(x, z) + 0.006, z); d.rotation.set(-Math.PI / 2 + rand(-0.15, 0.15), 0, rand(0, 6.28)); d.scale.set(1, rand(0.6, 1.4), 1);
+    d.updateMatrix(); straw.setMatrixAt(i, d.matrix); straw.setColorAt(i, c.setHSL(rand(0.09, 0.13), rand(0.3, 0.5), rand(0.25, 0.45)));
+  }
+  straw.receiveShadow = true; scene.add(straw);
+}
 
 (function buildWall() {
   const R = 18.6, N = 124, GATE = 0.13;
@@ -546,6 +713,9 @@ function buildTown() {
   const tmp = new THREE.Group();
   const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
   const pick = a => a[(Math.random() * a.length) | 0];
+  // the previous house's choices, so the next one along the street always looks different
+  const look = { type: null, roof: null, plaster: null };
+  const pickNot = (a, ...avoid) => { const ok = a.filter(x => !avoid.includes(x)); return pick(ok.length ? ok : a); };
 
   // ---- walls: three grubby plaster-and-timber variants, a daub gable fill, weathered boards
   const frameTex = (base, pattern) => canvasTex(256, (g, s) => {
@@ -645,8 +815,8 @@ function buildTown() {
   }, '#2a2214');
   // tw/course: tile size (m); lift: how far each course's butt stands proud; jit: per-tile wobble; sag: belly between eave and ridge
   const ROOF = {
-    clay:    { mat: surfMat(clayTex, 0.9, 2, 0, { side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
-    slate:   { mat: glintMat(slateTex, 0.55, 1.5, { side: THREE.DoubleSide, clearcoat: 0.12, clearcoatRoughness: 0.35 }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
+    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: COLD_SPEC, specularIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
+    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: COLD_SPEC, specularIntensity: 1, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
     shingle: { mat: surfMat(shingleTex, 0.95, 2, 0, { side: THREE.DoubleSide }), tw: 0.24, course: 0.24, lift: 0.045, jit: 0.6, sag: 0.12, ridge: 0.1 },
     thatch:  { mat: surfMat(thatchTex, 1, 3, 0, { side: THREE.DoubleSide }), tw: 0.5, course: 0.42, lift: 0.13, jit: 0.3, sag: 0.18, ridge: 0.3, bulge: true },
   };
@@ -769,7 +939,7 @@ function buildTown() {
 
   // timber-framed: stone ground floor, jettied plaster storeys, clay / slate / shingle roof
   function timberHouse(g) {
-    const w = rand(5, 7.5), d = rand(5, 6.5), storeys = Math.random() < 0.5 ? 2 : 3, gh = 3.2, plaster = pick(plasterMs);
+    const w = rand(5, 7.5), d = rand(5, 6.5), storeys = Math.random() < 0.5 ? 2 : 3, gh = 3.2, plaster = look.plaster = pickNot(plasterMs, look.plaster);
     mesh(box(w, gh + 0.8, d), stoneM, g, [0, (gh - 0.8) / 2, 0]); // plinth sinks into uneven ground
     door(g, rand(-w / 4, w / 4), d / 2 + 0.05);
     for (const sx of [-1, 1]) win(g, sx * w * 0.33, 1.9, d / 2 + 0.04, 0.7, 0.9, Math.random() < 0.6);
@@ -782,7 +952,7 @@ function buildTown() {
       for (const sx of [-0.5, 0.5]) mesh(box(0.08, 0.35, 0.04), rustM, g, [sx * fw, y + 0.11, jet / 2 + fd / 2 + 0.08]); // tie-rod anchors
       y += 3.02;
     }
-    const R = ROOF[pick(['clay', 'clay', 'clay', 'slate', 'shingle'])], rh = fd * rand(0.6, 0.85);
+    const R = ROOF[look.roof = pickNot(['clay', 'clay', 'clay', 'slate', 'shingle'], look.roof)], rh = fd * rand(0.6, 0.85);
     gableRoof(g, R, fw + 0.7, fd + 0.9, rh, y, jet / 2);
     const ends = new THREE.Mesh(gableEndGeo(fw, fd, rh * 0.94), daubM); ends.position.set(0, y, jet / 2); g.add(ends);
     if (Math.random() < 0.8) chimney(g, fw * rand(-0.35, 0.35), -fd * 0.2, y + rh * 0.6);
@@ -795,7 +965,7 @@ function buildTown() {
     door(g, rand(-w / 5, w / 5), d / 2 + 0.05, 1.0, 1.9);
     for (const sx of [-1, 1]) win(g, sx * w * 0.32, 1.55, d / 2 + 0.04, 0.55, 0.6, true);
     const rh = d * rand(0.85, 1.05);
-    gableRoof(g, ROOF.thatch, w + 0.9, d + 1.5, rh + 0.25, wh - 0.2);
+    gableRoof(g, ROOF.thatch, w + 0.9, d + 1.5, rh + 0.25, wh - 0.2); look.roof = 'thatch'; look.plaster = null;
     const ends = new THREE.Mesh(gableEndGeo(w, d, rh * 0.95), stoneM); ends.position.set(0, wh, 0); g.add(ends);
     chimney(g, (Math.random() < 0.5 ? -1 : 1) * (w / 2 - 0.4), 0, wh + rh);
   }
@@ -808,7 +978,7 @@ function buildTown() {
     for (const sx of [-1, 1]) win(g, sx * w * 0.32, 1.9, d / 2 + 0.04, 0.6, 0.8, Math.random() < 0.7);
     if (wh > 4) for (const sx of [-1, 0, 1]) win(g, sx * w * 0.3, 4.2, d / 2 + 0.04, 0.55, 0.75, false);
     const rh = d * rand(0.55, 0.75);
-    gableRoof(g, ROOF.shingle, w + 0.6, d + 0.8, rh, wh);
+    gableRoof(g, ROOF.shingle, w + 0.6, d + 0.8, rh, wh); look.roof = 'shingle'; look.plaster = null;
     const ends = new THREE.Mesh(gableEndGeo(w, d, rh * 0.94), planksM); ends.position.set(0, wh, 0); g.add(ends);
     if (Math.random() < 0.6) { // lean-to
       const sw = rand(1.8, 2.4), sd = d * 0.8, top = wh - 0.6, low = 2.0, run = sw + 0.3, L = Math.hypot(run, top - low), sx = w / 2 + sw / 2;
@@ -819,7 +989,7 @@ function buildTown() {
   }
   // tall, narrow townhouse turning its gable to the street
   function townhouse(g) {
-    const w = rand(4.2, 5.2), d = rand(6, 7.5), storeys = Math.random() < 0.5 ? 3 : 4, gh = 3.2, plaster = pick(plasterMs);
+    const w = rand(4.2, 5.2), d = rand(6, 7.5), storeys = Math.random() < 0.5 ? 3 : 4, gh = 3.2, plaster = look.plaster = pickNot(plasterMs, look.plaster);
     mesh(box(w, gh + 0.8, d), stoneM, g, [0, (gh - 0.8) / 2, 0]);
     door(g, -w * 0.2, d / 2 + 0.05);
     win(g, w * 0.25, 1.9, d / 2 + 0.04, 0.8, 1.0, Math.random() < 0.5);
@@ -830,7 +1000,7 @@ function buildTown() {
       mesh(box(fw, 2.8, fd), plaster, g, [0, y + 0.22 + 1.4, jet / 2]);
       y += 3.02;
     }
-    const R = ROOF[pick(['slate', 'slate', 'clay'])], rh = fw * rand(0.95, 1.25);
+    const R = ROOF[look.roof = pickNot(['slate', 'slate', 'clay'], look.roof)], rh = fw * rand(0.95, 1.25);
     gableRoof(g, R, fd + 0.6, fw + 0.6, rh, y, jet / 2, Math.PI / 2); // ridge runs front to back
     const ends = new THREE.Mesh(gableEndGeo(fd, fw, rh * 0.95), daubM); ends.position.set(0, y, jet / 2); ends.rotation.y = Math.PI / 2; g.add(ends);
     win(g, 0, y + rh * 0.35, jet / 2 + fd / 2 + 0.02, 0.6, 0.8, false); // attic window in the gable
@@ -840,13 +1010,16 @@ function buildTown() {
 
   // houses in rings around the arena, leaving a road open towards the castle; the inner rings are denser and taller
   for (const [r, n, jitter, mix] of [[27, 24, 1.5, [timberHouse, timberHouse, townhouse, townhouse, plankHouse]], [37, 30, 2, [timberHouse, townhouse, plankHouse, cottage]], [48, 36, 2.5, [timberHouse, plankHouse, cottage, cottage]]]) {
+    let first = null;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + rand(-0.04, 0.04);
       if (Math.abs(angWrap(a - Math.PI)) < 6 / r) continue;
       if (r === 37 && Math.abs(angWrap(a - 1.05)) < 0.18) continue; // bell tower plot
       const rr = r + rand(-jitter, jitter);
       const g = new THREE.Group(); g.position.set(Math.sin(a) * rr, 0, Math.cos(a) * rr); g.rotation.y = a + Math.PI + rand(-0.12, 0.12); tmp.add(g);
-      pick(mix)(g);
+      const build = i === n - 1 ? pickNot(mix, look.type, first) : pickNot(mix, look.type); // the ring closes on its first house too
+      look.type = build; first = first || build;
+      build(g);
     }
   }
   // bell tower
@@ -1635,10 +1808,10 @@ function buildHeroGLB(tpl) {
     boot: std(0x2b1d12, 0.78, 0, vc),
     hair: std(0x2a1b12, 1, 0, vc),
     // metals: worn and dull underneath, with a thin clear layer that throws a small, crisp, cold highlight
-    steel: phys(0x868b92, 0.48, 0.75, { ...vc, clearcoat: 0.35, clearcoatRoughness: 0.22, envMapIntensity: 0.6 }),
-    iron: phys(0x46474a, 0.6, 0.65, { ...vc, clearcoat: 0.18, clearcoatRoughness: 0.3, envMapIntensity: 0.45 }),
-    mail: phys(0x5f6266, 0.6, 0.7, { ...vc, side: THREE.DoubleSide, clearcoat: 0.15, clearcoatRoughness: 0.4, envMapIntensity: 0.45 }),
-    metal: phys(0xb8c0c8, 0.24, 1.0, { ...vc, emissive: 0x000000, clearcoat: 0.4, clearcoatRoughness: 0.12, envMapIntensity: 0.8 }),
+    steel: phys(0x868b92, 1.05, 0.75, { ...vc, roughnessMap: metalRough, clearcoat: 0.35, clearcoatRoughness: 0.5, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.25, envMapIntensity: 0.6 }),
+    iron: phys(0x46474a, 1.35, 0.65, { ...vc, roughnessMap: metalRough, clearcoat: 0.18, clearcoatRoughness: 0.7, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.3, envMapIntensity: 0.45 }),
+    mail: phys(0x5f6266, 1.3, 0.7, { ...vc, roughnessMap: metalRough, side: THREE.DoubleSide, clearcoat: 0.15, clearcoatRoughness: 0.8, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.45 }),
+    metal: phys(0xb8c0c8, 0.55, 1.0, { ...vc, roughnessMap: metalRough, emissive: 0x000000, clearcoat: 0.4, clearcoatRoughness: 0.28, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.8 }),
     eye: std(0xb8b0a2, 0.45, 0, vc),
   };
   const model = tpl.clone(true);

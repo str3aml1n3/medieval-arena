@@ -266,6 +266,15 @@ def finalize(part, name, parent, subdiv_len=0.045):
     if long_edges:  # give big flat panels enough vertices to carry baked shading
         bmesh.ops.subdivide_edges(bm, edges=long_edges, cuts=1, use_grid_fill=True)
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    # box-projected UVs (about 6 repeats per metre) so the game can lay surface textures — scratches, smudges,
+    # varying roughness — over the armour without needing hand-made unwraps
+    uvl = bm.loops.layers.uv.new('UVMap')
+    for f in bm.faces:
+        n = f.normal; ax = max(range(3), key=lambda k: abs(n[k]))
+        for lp in f.loops:
+            co = lp.vert.co
+            u, v = ((co.y, co.z), (co.x, co.z), (co.x, co.y))[ax]
+            lp[uvl].uv = (u * 6.0, v * 6.0)
     me = bpy.data.meshes.new(name); bm.to_mesh(me); bm.free()
     for m in MAT_ORDER:
         me.materials.append(MATS[m])
