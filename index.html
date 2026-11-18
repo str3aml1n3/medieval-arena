@@ -33,6 +33,13 @@
   #sub { position:absolute; left:50%; top:calc(30% + 44px); transform:translateX(-50%); font-size:16px; letter-spacing:.2em; opacity:0; transition:opacity .4s; text-shadow:0 2px 4px #000; }
   #help { position:absolute; left:24px; bottom:20px; font-family:Georgia,serif; font-size:12.5px; line-height:1.55; color:rgba(234,223,200,.82); text-shadow:0 1px 2px #000; background:rgba(0,0,0,.28); padding:10px 14px; border-left:2px solid rgba(217,180,106,.5); }
   #help b { color:var(--gold); font-weight:normal; display:inline-block; min-width:88px; }
+  /* the controls tip only shows on its own on very big screens; everywhere else it lives in the pause menu (H toggles it) */
+  #help { display:none; }
+  @media (min-width:1600px) and (min-height:900px) { #help { display:block; } }
+  body.helpOn #help { display:block; } body.helpOff #help { display:none; }
+  #pctl { display:none; margin:14px auto 0; text-align:left; width:max-content; max-width:92vw; font-family:Georgia,serif; font-size:13px; line-height:1.6; }
+  #pctl.open { display:block; }
+  #pctl .keys { margin:0; }
   #stance { position:absolute; left:24px; top:66px; font-size:11px; letter-spacing:.2em; color:rgba(234,223,200,.7); text-shadow:0 1px 2px #000; }
   #lockmark { position:absolute; left:0; top:0; width:12px; height:12px; border-right:2px solid #f0d08a; border-bottom:2px solid #f0d08a; opacity:0; transition:opacity .15s; filter:drop-shadow(0 0 2px #000) drop-shadow(0 0 6px rgba(240,180,90,.6)); will-change:transform; }
   #vignette { position:fixed; inset:0; pointer-events:none; background:radial-gradient(ellipse at center, transparent 45%, rgba(160,0,0,.7)); opacity:0; }
@@ -190,6 +197,38 @@
     <div class="menu">
       <button id="resumeBtn">RESUME</button>
       <button id="restartBtn" class="ghostbtn">RESTART FROM ROUND I</button>
+      <button id="ctlBtn" class="ghostbtn">CONTROLS</button>
+    </div>
+    <div id="pctl">
+      <div class="keys k-desk">
+        <span>W / S</span><span>forward / back</span>
+        <span>A / D</span><span>turn (strafe when locked on) · Shift runs</span>
+        <span>Ctrl / F</span><span>draw / sheathe sword</span>
+        <span>Hold LMB / E</span><span>action: lock on, then</span>
+        <span>&nbsp;+ W / A / D</span><span>strike forward / left / right</span>
+        <span>&nbsp;+ S</span><span>guard (a quick click alone strikes)</span>
+        <span>Chain</span><span>strike again once the cut lands, as the blade glints</span>
+        <span>RMB / K</span><span>parry · Space steps back, gets up</span>
+        <span>Tab</span><span>lock-on · flick the mouse to switch beast</span>
+        <span>R (hold)</span><span>look back · H shows this tip in game</span>
+        <span>N / M</span><span>music / all sound</span>
+      </div>
+      <div class="keys k-touch">
+        <span>Left thumb</span><span>move</span>
+        <span>Right thumb</span><span>drag to look · flick to switch beast</span>
+        <span>STRIKE</span><span>attack — again once the cut lands</span>
+        <span>PARRY</span><span>hold to guard</span>
+        <span>STEP</span><span>step back · get up</span>
+        <span>DRAW · LOCK</span><span>sword · lock-on</span>
+      </div>
+      <div class="keys k-portrait">
+        <span>Lower-left thumb</span><span>move</span>
+        <span>Tap</span><span>strike — again once the cut lands</span>
+        <span>Hold</span><span>guard</span>
+        <span>Swipe ← / →</span><span>side cut</span>
+        <span>Swipe ↓</span><span>step back · get up</span>
+        <span>⇄</span><span>next beast</span>
+      </div>
     </div>
     <div class="opts">
       <label>Music <input type="range" id="optMusic" min="0" max="1" step="0.05"></label>

@@ -159,7 +159,7 @@ scene.add(sky);
 // and breathes, glows where it meets the land, and crackles with arcs of lightning that send ripples across it
 const barrier = (() => {
   const R = 150, HITS = 6;
-  const geo = new THREE.SphereGeometry(R, 128, 64);
+  const geo = new THREE.SphereGeometry(R, 96, 40);
   const hits = Array.from({ length: HITS }, () => new THREE.Vector4(0, 1, 0, 99));
   // A living membrane rather than a grid: warped, drifting noise grows branching veins and soft cells,
   // light pulses stream along the veins, the whole skin slowly breathes, and it only shows in drifting patches.
@@ -311,14 +311,22 @@ scene.add(coldFill);
 
 // ============================================================ arena
 // ---- terrain: one height function shared by rendering and gameplay (feet, blood, pebbles follow it)
+// Value noise (smooth, irregular) for the ground. Sums of sines made regular ridges and stripes, read as waves.
+const NOISE_P = new Uint8Array(512);
+{ const p = [...Array(256).keys()]; for (let i = 255; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [p[i], p[j]] = [p[j], p[i]]; } for (let i = 0; i < 512; i++) NOISE_P[i] = p[i & 255]; }
+function noise2(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, X = xi & 255, Y = yi & 255;
+  const v = (a, b) => NOISE_P[NOISE_P[a] + b] / 255;
+  const u = xf * xf * (3 - 2 * xf), w = yf * yf * (3 - 2 * yf);
+  return lerp(lerp(v(X, Y), v(X + 1, Y), u), lerp(v(X, Y + 1), v(X + 1, Y + 1), u), w);
+}
+function fbm2(x, y, oct = 3) { let s = 0, a = 0.5, n = 0; for (let i = 0; i < oct; i++) { s += a * noise2(x, y); n += a; x = x * 2.03 + 17.1; y = y * 2.03 - 9.7; a *= 0.5; } return s / n; }
 function groundH(x, z) {
   const r = Math.hypot(x, z);
-  const h = 0.045 * Math.sin(x * 0.83 + 1.3) * Math.cos(z * 0.71 - 0.4)
-        + 0.03 * Math.sin(x * 2.17 - z * 1.63 + 2.1)
-        + 0.015 * Math.sin(x * 4.7 + z * 3.9) * Math.cos(x * 3.1 - z * 5.3);
-  if (r < 19.5) return h + Math.max(0, r - 15.5) ** 2 * 0.03; // sand banked up against the stockade
+  const h = (fbm2(x * 0.32 + 50, z * 0.32 + 50, 3) - 0.5) * 0.16; // gentle, uneven bumps and hollows
+  if (r < 19.5) return h + Math.max(0, r - 15.5) ** 2 * 0.03; // earth banked up against the stockade
   const far = clamp((r - 58) / 40, 0, 1); // the town stays gentle, hills roll beyond the city wall
-  return h * 3 + 0.22 * Math.sin(x * 0.11 + z * 0.07) * Math.cos(z * 0.09 - x * 0.05)
+  return h * 3 + (fbm2(x * 0.06 + 3, z * 0.06 - 8, 2) - 0.5) * 0.5
     + far * (2.0 * Math.sin(x * 0.031 + 0.7) * Math.cos(z * 0.027 - 1.1) + 1.3 * Math.sin(x * 0.067 - z * 0.052) + 2.2);
 }
 // generated albedo + normal map pair from one tileable height field
@@ -389,7 +397,8 @@ function terrainMesh(geo, maps, tint) {
   const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1.2, 1.2), vertexColors: true, roughness: 0.95 }));
   m.receiveShadow = true; scene.add(m); return m;
 }
-const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(z * 0.23 * s - 0.6) * 0.6 + Math.sin((x - z) * 0.61 * s) * 0.25 + Math.sin(x * 1.37 * s + z * 0.97 * s) * 0.15);
+// large-scale variation across the ground (irregular patches, no stripes): roughly 0..1
+const macro = (x, z, s) => clamp((fbm2(x * 0.2 * s + 7.3, z * 0.2 * s - 3.1, 3) - 0.5) * 2.1 + 0.5, 0, 1);
 // The arena floor: grey-brown packed earth, not yellow sand. Over it lie patches of grey gravel, worn tracks (a ring
 // trodden round the middle by fighters circling each other, and a path in from the gate), and soggy, mossy green patches
 // where grass still clings on, mostly out of the way near the stockade. One function, so the grass tufts can find them.
@@ -401,8 +410,8 @@ function arenaPatches(x, z) {
   const path = z < 0 ? Math.exp(-((x + 0.9 * Math.sin(z * 0.35)) ** 2) / 1.2) * clamp((-z - 2) / 4, 0, 1) : 0;
   return { gravel, green: green * (1 - Math.max(ring, path)), track: Math.max(ring, path) };
 }
-const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 160, grains: 9000, strength: 3.2, contrast: 1.45, dark: [64, 59, 52], light: [134, 126, 114], repeat: 7 });
-const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
+const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 0, stones: 160, grains: 9000, strength: 3.2, contrast: 1.45, dark: [64, 59, 52], light: [134, 126, 114], repeat: 7 });
+const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 150, 56), sandMaps, (x, z) => {
   const m = macro(x, z, 1), r = Math.hypot(x, z), P0 = arenaPatches(x, z);
   const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.45;  // churned, darker mud
   const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2;                                       // trodden filth along the wall
@@ -414,7 +423,7 @@ const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sand
 });
 sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't sheen across it
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
-const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
+const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 120, 60), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
   const worn = Math.exp(-((r - 22) ** 2) / 8) * 0.5 + (Math.abs(x) < 4 && z < -18 ? 0.5 : 0); // trampled ring + road edge
   const dry = clamp(d * 0.6 + worn, 0, 1), b = 0.85 + m * 0.3;
@@ -422,7 +431,7 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
 });
 // loose pebbles on the sand
 {
-  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75, 0, { envMapIntensity: 0.5 }), n);
+  const n = TOUCH ? 90 : 170, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75, 0, { envMapIntensity: 0.5 }), n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.8, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.03, 0.085);
@@ -430,14 +439,14 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
     d.updateMatrix(); peb.setMatrixAt(i, d.matrix);
     const v = rand(0.28, 0.5); peb.setColorAt(i, c.setRGB(v * 0.95, v * 0.85, v * 0.7));
   }
-  peb.castShadow = peb.receiveShadow = true; scene.add(peb);
+  peb.receiveShadow = true; scene.add(peb); // too small to need a shadow of their own
 }
 // grass tufts around the outside of the stockade: each tuft is a clump of thin, curved, tapering blades (dark at the
 // root, sun-bleached at the tip) that sway in the wind. The sway is done in the vertex shader, so it costs nothing on
 // the CPU; the tufts skip the depth pre-pass, since the pre-pass would draw them unswayed.
 const grassWind = { value: 0 };
 {
-  const BLADES = 11, SEG = 3, pos = [], col = [], nor = [], idx = [];
+  const BLADES = 7, SEG = 2, pos = [], col = [], nor = [], idx = [];
   for (let b = 0; b < BLADES; b++) {
     const th = rand(0, 6.28), lean = rand(0.25, 0.9), h = rand(0.22, 0.58), w = rand(0.018, 0.03);
     const r0 = rand(0, 0.07), ox = Math.cos(th) * r0, oz = Math.sin(th) * r0;
@@ -472,18 +481,18 @@ const grassWind = { value: 0 };
       float bend = transformed.y * transformed.y * 0.9;
       transformed.x += sway * bend; transformed.z += sway * bend * 0.5; transformed.y -= abs(sway) * bend * 0.15;`);
   };
-  const n = TOUCH ? 900 : 1700, tuft = new THREE.InstancedMesh(geo, mat, n);
+  const n = TOUCH ? 450 : 900, tuft = new THREE.InstancedMesh(geo, mat, n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     // thicker against the stockade, thinning out into the town
-    const a = rand(0, 6.28), r = 19.6 + Math.pow(Math.random(), 1.8) * 40, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.7, 1.5);
+    const a = rand(0, 6.28), r = 19.6 + Math.pow(Math.random(), 1.8) * 24, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.7, 1.5);
     d.position.set(x, groundH(x, z) - 0.01, z); d.rotation.set(rand(-0.08, 0.08), rand(0, 6.28), rand(-0.08, 0.08)); d.scale.set(s, s * rand(0.8, 1.2), s);
     d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.16, 0.24), rand(0.3, 0.5), rand(0.2, 0.32)));
   }
   tuft.receiveShadow = true; scene.add(tuft);
   // sparse, short, darker tufts in the muddy green patches on the arena floor
   const spots = [];
-  for (let i = 0; i < 6000 && spots.length < (TOUCH ? 220 : 420); i++) {
+  for (let i = 0; i < 6000 && spots.length < (TOUCH ? 90 : 170); i++) {
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.6, x = Math.sin(a) * r, z = Math.cos(a) * r;
     if (Math.random() < arenaPatches(x, z).green * 0.9) spots.push([x, z]);
   }
@@ -733,18 +742,18 @@ const metalRough = (() => {
     if (fletched) for (let k = 0; k < 3; k++) { const q = k * 2.094; mesh(vaneG, fletchM, g, [Math.sin(q) * 0.012, -len + 0.09, Math.cos(q) * 0.012], [0, q, 0]); }
   }
   const STONE = [[0.85, 1.8], [-1.8, -0.85]];
-  for (let i = 0; i < 26; i++) { // stuck in the sand, tails up
+  for (let i = 0; i < 16; i++) { // stuck in the sand, tails up
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 16, x = Math.sin(a) * r, z = Math.cos(a) * r;
     const dir = new V3(rand(-0.7, 0.7), -1, rand(-0.7, 0.7)).normalize(), depth = rand(0.1, 0.25);
     arrow(new V3(x, groundH(x, z), z).addScaledVector(dir, depth), dir, rand(0.6, 0.75), Math.random() < 0.8);
   }
-  for (let i = 0; i < 16; i++) { // lying flat, some snapped
+  for (let i = 0; i < 10; i++) { // lying flat, some snapped
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 16.5, x = Math.sin(a) * r, z = Math.cos(a) * r, q = rand(0, 6.28);
     const broken = Math.random() < 0.45, dir = new V3(Math.cos(q), 0.03, Math.sin(q));
     arrow(new V3(x, groundH(x, z) + 0.008, z), dir, broken ? rand(0.25, 0.45) : 0.72, !broken);
     if (broken) arrow(new V3(x - Math.cos(q) * rand(0.5, 1), groundH(x, z) + 0.008, z - Math.sin(q) * rand(0.5, 1)), new V3(Math.cos(q + rand(-1, 1)), 0.03, Math.sin(q + rand(-1, 1))), rand(0.25, 0.4), true, false);
   }
-  for (let i = 0; i < 18; i++) { // buried in the palisade
+  for (let i = 0; i < 12; i++) { // buried in the palisade
     const a = rand(0, 6.28);
     if (Math.abs(angWrap(a - Math.PI)) < 0.3 || STONE.some(([lo, hi]) => angWrap(a) >= lo - 0.05 && angWrap(a) <= hi + 0.05)) continue;
     const dir = new V3(Math.sin(a) + rand(-0.25, 0.25), rand(-0.25, 0.15), Math.cos(a) + rand(-0.25, 0.25)).normalize();
@@ -753,7 +762,7 @@ const metalRough = (() => {
   bakeStatic(arrows);
 
   // loose straw trodden into the sand, thicker near the walls and the gate
-  const n = 900, straw = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.012, 0.2), std(0xffffff, 0.95, 0, { side: THREE.DoubleSide }), n);
+  const n = TOUCH ? 220 : 420, straw = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.012, 0.2), std(0xffffff, 0.95, 0, { side: THREE.DoubleSide }), n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     const a = rand(0, 6.28), r = Math.random() < 0.6 ? rand(13, 17.6) : Math.sqrt(Math.random()) * 17, x = Math.sin(a) * r, z = Math.cos(a) * r;
@@ -2632,17 +2641,18 @@ function updatePlayer(dt) {
     }
     case 'attack': {
       P.t += dt;
-      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a;
-      // Chaining is forgiving: a press during the cut itself is remembered and fires the moment the window opens; only
-      // mashing during the wind-up breaks the chain. The window runs to the end of the recovery, plus a short grace
-      // after it (see `chainGrace` in idle).
-      if (wantAttack && P.step < COMBO.length - 1) {
-        if (P.t < w * 0.8) P.failed = true;
-        else if (!P.failed) P.queued = { l: swL, r: swR, at: P.t };
+      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a + 0.05;
+      // Chaining: the next strike has to wait until this one has landed. The window opens just after the cut (when the
+      // blade glints) and runs to the end of the recovery, plus a short grace after it (`chainGrace` in idle). A press up
+      // to 70 ms early is still taken (human timing), and fires as the window opens. Anything earlier, so mashing too,
+      // breaks the chain.
+      if (wantAttack && P.step < COMBO.length - 1 && !P.failed) {
+        if (P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
+        else P.queued = { l: swL, r: swR, at: P.t };
       }
       if (P.queued && !P.failed && P.t >= winStart && P.st >= 4) {
         const q = P.queued, late = (P.t - winStart) / (tot - winStart);
-        popText(hero.swordTip.getWorldPosition(new V3()), q.at < winStart || late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
+        popText(hero.swordTip.getWorldPosition(new V3()), late < 0.35 ? 'PERFECT' : 'GOOD', 'timing');
         startAttack(P.step + 1, q.l, q.r, target);
         break;
       }
@@ -2669,7 +2679,7 @@ function updatePlayer(dt) {
       tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
       if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
       k = 30;
-      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.08;
+      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.07;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
       if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); if (!P.failed) { P.chainGrace = 0.3; P.lastStep = P.step; } }
@@ -2907,6 +2917,7 @@ function resumeGame() {
   lockPointer();
 }
 $('resumeBtn').onclick = resumeGame;
+$('ctlBtn').onclick = () => $('pctl').classList.toggle('open');
 $('restartBtn').onclick = () => { resumeGame(); resetGame(); };
 $('optMusic').oninput = e => { Music.setVolume(+e.target.value); saveSettings(); };
 $('optSound').oninput = e => { settings.sound = +e.target.value; if (master) master.gain.value = settings.sound; saveSettings(); };
@@ -2958,7 +2969,7 @@ addEventListener('keydown', e => {
   if (e.code === 'Escape') { if (paused) resumeGame(); else pauseGame(); return; }
   if (paused) return;
   if (e.code === 'Tab') lockOn = !lockOn;
-  if (e.code === 'KeyH') $('help').style.display = $('help').style.display === 'none' ? '' : 'none';
+  if (e.code === 'KeyH') { const on = getComputedStyle($('help')).display !== 'none'; document.body.classList.toggle('helpOn', !on); document.body.classList.toggle('helpOff', on); }
   if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : settings.sound;
   if (e.code === 'KeyN') Music.toggle();
 });
@@ -3335,7 +3346,10 @@ window.__game = {
   P, beasts, hero, camera, scene, THREE, game, settings, Weather, POSE,
   startRound, resetGame, startAttack, hitPlayer, currentTarget, switchTarget, acquireLock, barrierSpawn: barrier.spawn,
   get lockTarget() { return lockTarget; }, get lockOn() { return lockOn; }, set lockOn(v) { lockOn = v; },
-  press(code) { pressed.add(code); }, hold(code, v = true) { keys[code] = v; },
+  press(code) { pressed.add(code); },
+  renderer, draw: () => drawFrame(),
+  // debug: average cost of a frame (simulation + drawing) over n frames, and what the renderer drew
+  bench(n = 5) { renderer.setPixelRatio(1); const t0 = performance.now(); for (let i = 0; i < n; i++) { tick(1 / 60); drawFrame(); renderer.getContext().finish(); } const ms = (performance.now() - t0) / n; renderer.setPixelRatio(pixelRatio); return { ms: +ms.toFixed(1), calls: renderer.info.render.calls, tris: renderer.info.render.triangles }; }, hold(code, v = true) { keys[code] = v; },
   step(seconds, fps = 60) { for (let i = 0; i < Math.round(seconds * fps); i++) { tick(1 / fps); pressed.clear(); } },
 };
 SFX.crackle = () => nz({ dur: 0.03, type: 'highpass', f0: 2200, f1: 3200, gain: rand(0.01, 0.04) });

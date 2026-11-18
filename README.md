@@ -15,7 +15,7 @@ The weather changes as you fight. Dry spells and showers take turns: clouds buil
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
 ## Combat
-- **Rhythm combos:** attack, then press again while the blade glints to chain up to six strikes. The timing is forgiving: a press during the cut is remembered and fires as soon as the window opens, and a press just after the swing ends still chains. Only mashing during the wind-up breaks the chain: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. 
+- **Rhythm combos:** attack, then strike again once the cut has landed, when the blade glints, to chain up to six strikes: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. The window lasts through the recovery and a moment after it, so there's time to find the rhythm. Pressing before the cut lands (mashing) breaks the chain and shows TOO EARLY.
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
@@ -43,7 +43,7 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 | Tab | lock-on |
 | Mouse flick | switch the locked-on beast |
 | R (hold) | look back |
-| H | help |
+| H | show / hide the controls tip (also in the pause menu) |
 | N | music on/off |
 | M | mute all |
 | Esc | pause menu (volume, look sensitivity, brightness, weather, lock-on, restart) |
