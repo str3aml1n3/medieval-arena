@@ -85,34 +85,36 @@ const SUN_DIR = new V3(0.38, 0.8, 0.46).normalize();
 // a soft sun halo burning through the haze, and lightning that flickers inside the clouds.
 const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) }, noiseTex: { value: noiseTex } },
+  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) }, noiseTex: { value: noiseTex }, overcast: { value: 0 } },
   vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `varying vec3 vD; uniform vec3 sunDir; uniform float time; uniform float flash; uniform vec3 flashDir;
+  fragmentShader: `varying vec3 vD; uniform vec3 sunDir; uniform float time; uniform float flash; uniform vec3 flashDir; uniform float overcast;
     uniform sampler2D noiseTex;
     float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
       return texture2D(noiseTex, (i + u + 0.5) / 256.0).g; }
     float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 6; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; }
     void main(){
       vec3 d = normalize(vD); float h = d.y;
-      vec3 zen = vec3(0.09,0.14,0.24), mid = vec3(0.30,0.36,0.44), hor = vec3(0.60,0.58,0.54);
+      // overcast (weather): the sky greys over, the sun is buried, the clouds close up into a low, dark lid
+      float oc = overcast;
+      vec3 zen = mix(vec3(0.09,0.14,0.24), vec3(0.22,0.24,0.26), oc), mid = mix(vec3(0.30,0.36,0.44), vec3(0.33,0.35,0.37), oc), hor = mix(vec3(0.60,0.58,0.54), vec3(0.44,0.46,0.47), oc);
       vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
       c = mix(c, zen, smoothstep(0.18, 0.95, h));
       c = mix(c, vec3(0.30,0.31,0.28), smoothstep(0.0, -0.15, h));
       float s = max(dot(d, sunDir), 0.0);
       vec3 sunCol = vec3(1.0,0.86,0.66);
-      c += sunCol * (pow(s, 5.0) * 0.18 + pow(s, 48.0) * 0.35);
+      c += sunCol * (pow(s, 5.0) * 0.18 + pow(s, 48.0) * 0.35) * (1.0 - oc * 0.85);
       float cov = 0.0;
       if (h > -0.03) {
         vec2 uv = d.xz / (h + 0.13) * 1.15;
         vec2 w = vec2(time * 0.006, time * 0.0025);
         vec2 q = uv + w + 0.55 * vec2(fbm(uv * 0.7 - w), fbm(uv * 0.7 + 3.1 + w)); // domain warp → billowing shapes
         float n = fbm(q);
-        cov = smoothstep(0.40, 0.74, n) * smoothstep(-0.03, 0.18, h);
+        cov = smoothstep(0.40 - 0.3 * oc, 0.74 - 0.22 * oc, n) * smoothstep(-0.03, 0.18, h);
         float n2 = fbm(q + normalize(sunDir.xz + 1e-4) * 0.09);                   // one step toward the sun
         float lit = clamp((n - n2) * 4.0 + 0.45, 0.0, 1.0);
-        vec3 belly = vec3(0.16,0.17,0.20), top = vec3(0.86,0.83,0.78);
+        vec3 belly = mix(vec3(0.16,0.17,0.20), vec3(0.12,0.13,0.14), oc), top = mix(vec3(0.86,0.83,0.78), vec3(0.42,0.44,0.46), oc);
         vec3 cc = mix(belly, top, lit * 0.75 + smoothstep(0.75, 0.4, n) * 0.25);
-        cc += sunCol * pow(s, 10.0) * (1.0 - smoothstep(0.5, 0.8, n)) * 0.9;     // silver lining near the sun
+        cc += sunCol * pow(s, 10.0) * (1.0 - smoothstep(0.5, 0.8, n)) * 0.9 * (1.0 - oc); // silver lining near the sun
         cc = mix(cc, hor, smoothstep(0.25, 0.0, h) * 0.55);                      // distant clouds melt into the haze
         c = mix(c, cc, cov * 0.94);
         float ci = fbm(vec2(uv.x * 0.6, uv.y * 2.4) + w * 2.0);                  // high cirrus streaks
@@ -121,7 +123,7 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.Shad
         c += vec3(0.55,0.65,1.0) * flash * g * (0.25 + cov * 1.4);
       }
       c = mix(c, hor * 1.04, exp(-max(h, 0.0) * 10.0) * 0.55);                    // thick haze on the horizon
-      c += sunCol * pow(s, 1400.0) * 5.0 * (1.0 - cov * 0.9);
+      c += sunCol * pow(s, 1400.0) * 5.0 * (1.0 - cov * 0.9) * (1.0 - oc);
       gl_FragColor = vec4(c, 1.0);
     }`
 }));
@@ -218,7 +220,12 @@ const barrier = (() => {
   }
   function spawn() {
     const a = arcs.find(x => x.life <= 0); if (!a) return;
-    const theta = rand(0, Math.PI * 2), y = Math.random() < 0.4 ? rand(0.03, 0.2) : rand(0.2, 0.9);
+    // most strikes land where the player is looking (as medieval-sim does), so they aren't wasted behind the camera
+    let theta = rand(0, Math.PI * 2), y = Math.random() < 0.4 ? rand(0.03, 0.2) : rand(0.2, 0.9);
+    if (Math.random() < 0.75) {
+      camera.getWorldDirection(t2);
+      theta = Math.atan2(t2.z, t2.x) + rand(-0.6, 0.6); y = clamp(Math.max(t2.y, 0) + rand(0.02, 0.4), 0.03, 0.9);
+    }
     const start = new V3(Math.cos(theta) * Math.sqrt(1 - y * y), y, Math.sin(theta) * Math.sqrt(1 - y * y));
     const dir = tmp.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).addScaledVector(start, -tmp.dot(start)).normalize().clone();
     const segs = []; walk(segs, start, dir, rand(22, 50) | 0, 0.55); // curling, root-like tendrils of lightning
@@ -234,14 +241,16 @@ const barrier = (() => {
     hits[hitIdx].set(start.x, start.y, start.z, 0); hitIdx = (hitIdx + 1) % HITS;
     sky.material.uniforms.flash.value = Math.max(sky.material.uniforms.flash.value, rand(0.4, 1));
     sky.material.uniforms.flashDir.value.copy(start);
-    SFX.zap(Math.min(1, 0.6 + y));
+    // the crackle comes from the strike's side: pan it by where it is relative to the camera
+    camera.getWorldDirection(t2); const camRight = tmp.set(-t2.z, 0, t2.x).normalize();
+    SFX.zap(Math.min(1, 0.6 + y), clamp(start.x * camRight.x + start.z * camRight.z, -1, 1) * 0.8);
   }
   return {
     spawn,
     update(dt, time) {
       mat.uniforms.time.value = time;
       for (const h of hits) h.w += dt;
-      nextArc -= dt;
+      nextArc -= dt * (1 + 1.5 * Weather.rain); // the barrier is restless in a storm
       if (nextArc <= 0) { spawn(); if (Math.random() < 0.3) spawn(); nextArc = rand(0.8, 4); }
       for (const a of arcs) {
         if (a.life <= 0) continue;
@@ -261,7 +270,8 @@ const barrier = (() => {
   scene.environment = pmrem.fromScene(envScene, 0, 0.1, 1000).texture;
 }
 
-scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x6a5a40, 0.55));
+const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x6a5a40, 0.55);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffeccc, 2.75);
 sun.position.copy(SUN_DIR).multiplyScalar(60);
 sun.castShadow = true;
@@ -355,7 +365,7 @@ function terrainMesh(geo, maps, tint) {
 }
 const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(z * 0.23 * s - 0.6) * 0.6 + Math.sin((x - z) * 0.61 * s) * 0.25 + Math.sin(x * 1.37 * s + z * 0.97 * s) * 0.15);
 const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 140, grains: 9000, strength: 3.2, contrast: 1.5, dark: [78, 60, 40], light: [150, 124, 92], repeat: 7 });
-terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
+const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
   const m = macro(x, z, 1), r = Math.hypot(x, z), trodden = Math.exp(-r * r / 60) * 0.12;
   const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.5;  // churned, darker mud
   const grime = clamp((r - 12.5) / 4, 0, 1) * 0.22;                                      // trodden filth along the wall
@@ -363,7 +373,7 @@ terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
   return [v * 1.02, v * (1 - mud * 0.05), v * (0.94 - mud * 0.06)];
 });
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
-terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
+const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
   const worn = Math.exp(-((r - 22) ** 2) / 8) * 0.5 + (Math.abs(x) < 4 && z < -18 ? 0.5 : 0); // trampled ring + road edge
   const dry = clamp(d * 0.6 + worn, 0, 1), b = 0.85 + m * 0.3;
@@ -1388,6 +1398,87 @@ function updateTorches(dt, time) {
   }
 }
 
+// ============================================================ weather
+// After medieval-sim's dynamic weather: dry spells and showers take turns. Clouds build up over half a minute and close
+// into a grey lid, the sun is buried, the haze thickens and the light goes flat; then the rain comes, as streaks falling
+// through a box that travels with the camera, splashes in the sand and a hiss over everything. The sand, stone and wood
+// darken and turn slick while it rains and dry out slowly afterwards. Pause menu: Changing / Dry / Rain.
+const Weather = (() => {
+  const wx = { cloud: 0, rain: 0, wet: 0, want: false, t: rand(70, 160) };
+  const FOG_DRY = new THREE.Color(0x8e9296), FOG_WET = new THREE.Color(0x676d71), FOG_D = 0.0058;
+  const smooth = x => x * x * (3 - 2 * x);
+  // surfaces that get wet: [material, dry roughness]
+  const wetMats = [sandFloor.material, grassFloor.material, stoneM, logMat, darkWood].map(m => [m, m.roughness]);
+  const N = 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
+  const pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
+  for (let i = 0; i < seed.length; i++) seed[i] = Math.random();
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.LineBasicMaterial({ color: 0xb2bcc4, transparent: true, opacity: 0, depthWrite: false });
+  const lines = new THREE.LineSegments(geo, mat); lines.frustumCulled = false; lines.visible = false; scene.add(lines);
+  let hiss = null, patter = null, splashAcc = 0;
+  function initAudio() { // two noise beds: the hiss of the drops in the air, and a duller patter on sand and wood
+    if (hiss || !AC) return;
+    const bed = (type, f, q, extra) => {
+      const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const f1 = AC.createBiquadFilter(); f1.type = type; f1.frequency.value = f; f1.Q.value = q;
+      const g = AC.createGain(); g.gain.value = 0;
+      let n = s.connect(f1); if (extra) { const f2 = AC.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = extra; n = n.connect(f2); }
+      n.connect(g).connect(master); s.start(0, Math.random()); return g;
+    };
+    hiss = bed('highpass', 1300, 0.5, 7000); patter = bed('bandpass', 520, 0.6);
+  }
+  function setLevel(r) {
+    if (!hiss) return;
+    hiss.gain.setTargetAtTime(r * 0.16, AC.currentTime, 0.4); patter.gain.setTargetAtTime(r * 0.22, AC.currentTime, 0.4);
+  }
+  function update(dt, time) {
+    const mode = settings.weather;
+    if (mode === 'dynamic') { if ((wx.t -= dt) < 0) { wx.want = !wx.want; wx.t = wx.want ? rand(60, 130) : rand(100, 220); } }
+    else wx.want = mode === 'rain';
+    wx.cloud = clamp(wx.cloud + (wx.want ? dt : -dt) / 28, 0, 1);
+    wx.rain = smooth(clamp((wx.cloud - 0.5) / 0.5, 0, 1));
+    wx.wet = clamp(wx.wet + (wx.rain > wx.wet ? (wx.rain - wx.wet) * dt / 8 : -dt / 70), 0, 1); // soaks in fast, dries slowly
+    const c = smooth(wx.cloud), w = wx.wet;
+    // sky, haze and light
+    sky.material.uniforms.overcast.value = c;
+    scene.fog.color.lerpColors(FOG_DRY, FOG_WET, c); scene.fog.density = FOG_D * (1 + 0.9 * c);
+    sun.intensity = 2.75 * (1 - 0.62 * c); coldFill.intensity = 1.1 * (1 - 0.35 * c); hemi.intensity = 0.55 * (1 + 0.15 * c);
+    for (const [m, r] of wetMats) { m.roughness = r * (1 - 0.42 * w); m.color.setScalar(1 - 0.24 * w); }
+    // rain streaks: each drop loops through a box that moves with the camera, slanted by the wind
+    const r = wx.rain;
+    lines.visible = r > 0.01;
+    if (lines.visible) {
+      mat.opacity = 0.42 * r;
+      const cp = camera.position, n = Math.floor(N * r);
+      for (let i = 0; i < N; i++) {
+        const o = i * 6, s3 = i * 3;
+        if (i >= n) { pos.fill(0, o, o + 6); continue; }
+        const y = ((seed[s3 + 1] * BOX[1] - time * FALL) % BOX[1] + BOX[1]) % BOX[1], fallen = BOX[1] - y;
+        const x = cp.x + ((seed[s3] * BOX[0] + fallen * WIND[0] / FALL - cp.x) % BOX[0] + BOX[0]) % BOX[0] - BOX[0] / 2;
+        const z = cp.z + ((seed[s3 + 2] * BOX[2] + fallen * WIND[1] / FALL - cp.z) % BOX[2] + BOX[2]) % BOX[2] - BOX[2] / 2;
+        const yy = cp.y - 7 + y;
+        pos[o] = x; pos[o + 1] = yy; pos[o + 2] = z;
+        pos[o + 3] = x - WIND[0] / FALL * LEN; pos[o + 4] = yy + LEN; pos[o + 5] = z - WIND[1] / FALL * LEN;
+      }
+      geo.attributes.position.needsUpdate = true;
+      // little splashes in the sand around the hero
+      splashAcc += dt * 140 * r;
+      while (splashAcc > 1) {
+        splashAcc--;
+        const a = rand(0, 6.28), d = Math.sqrt(Math.random()) * 10, x = P.pos.x + Math.sin(a) * d, z = P.pos.z + Math.cos(a) * d;
+        if (Math.hypot(x, z) > ARENA_R) continue;
+        fxNorm.emit(tmpV2.set(x, groundH(x, z) + 0.03, z), tmpV.set(rand(-0.4, 0.4), rand(0.6, 1.3), rand(-0.4, 0.4)), [0.62, 0.64, 0.66], rand(0.03, 0.05), rand(0.15, 0.28), -9, 0.5, 0, 0.55);
+      }
+    }
+    setLevel(r);
+  }
+  return {
+    wx, update, initAudio,
+    silence() { setLevel(0); },
+    get rain() { return wx.rain; },
+  };
+})();
+
 // ============================================================ audio (synthesized)
 let AC = null, master = null, noiseBuf = null;
 function initAudio() {
@@ -1406,6 +1497,7 @@ function initAudio() {
   const lg = AC.createGain(); lg.gain.value = 170; lfo.connect(lg).connect(f.frequency); lfo.start();
   master.gain.value = settings.sound;
   Music.init(AC, master);
+  Weather.initAudio();
 }
 
 // ============================================================ orchestral score
@@ -1569,7 +1661,7 @@ const Music = (() => {
     get volume() { return vol; }, get enabled() { return on; },
   };
 })();
-function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.4, attack = 0.004, delay = 0 }) {
+function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.4, attack = 0.004, delay = 0, pan = 0 }) {
   if (!AC) return;
   const t = AC.currentTime + delay;
   const s = AC.createBufferSource(); s.buffer = noiseBuf;
@@ -1577,7 +1669,9 @@ function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.
   f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
   const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  s.connect(f).connect(g).connect(master); s.start(t, Math.random()); s.stop(t + dur + 0.05);
+  let out = s.connect(f).connect(g);
+  if (pan && AC.createStereoPanner) { const p = AC.createStereoPanner(); p.pan.value = pan; out = out.connect(p); }
+  out.connect(master); s.start(t, Math.random()); s.stop(t + dur + 0.05);
 }
 function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 0.004, delay = 0, lp = 0, vib = 0, vibF = 25 }) {
   if (!AC) return;
@@ -1722,11 +1816,14 @@ const SFX = {
   dodge() { nz({ dur: 0.26, type: 'lowpass', f0: 900, f1: 180, gain: 0.25 }); },
   gong() { [98, 196.5, 247, 392.7, 523].forEach((f, i) => tn({ dur: 3.2 - i * 0.4, f0: f, f1: f * 0.995, gain: 0.22 / (i + 1), attack: 0.01 })); nz({ dur: 0.3, type: 'lowpass', f0: 600, f1: 100, gain: 0.3 }); },
   // the barrier crackling somewhere far overhead, then a low rumble rolling across the town
-  zap(near = 1) {
-    for (let i = 0, t = 0; i < 6; i++, t += rand(0.015, 0.07)) nz({ dur: rand(0.02, 0.06), type: 'highpass', f0: rand(2500, 4500), f1: 1400, gain: 0.035 * near, delay: t });
-    nz({ dur: 1.4, type: 'lowpass', f0: 260, f1: 50, gain: 0.08 * near, attack: 0.15, delay: rand(0.3, 0.7) });
+  zap(near = 1, pan = 0) {
+    for (let i = 0, t = 0; i < 6; i++, t += rand(0.015, 0.07)) nz({ dur: rand(0.02, 0.06), type: 'highpass', f0: rand(2500, 4500), f1: 1400, gain: 0.035 * near, delay: t, pan });
+    nz({ dur: 1.4, type: 'lowpass', f0: 260, f1: 50, gain: 0.08 * near, attack: 0.15, delay: rand(0.3, 0.7), pan: pan * 0.5 });
   },
   whiff() { nz({ dur: 0.22, f0: 600, f1: 1600, q: 0.8, gain: 0.18 }); },
+  lockSwitch() { tn({ dur: 0.06, f0: 1900, f1: 1300, gain: 0.04 }); },
+  // knocked flat on the back: the body slapping into the sand, the wind knocked out of him
+  knockdown() { tn({ dur: 0.4, f0: 110, f1: 34, gain: 0.85 }); nz({ dur: 0.45, type: 'lowpass', f0: 700, f1: 90, gain: 0.6 }); this.hurt(false, 3); },
 };
 
 // ============================================================ the hero
@@ -1838,6 +1935,8 @@ const POSE = {
   spinS: pose({ spine: [0.28, -1.1, 0], neck: [-0.1, 0.95, 0], rSh: [-0.4, 0, -1.45], rEl: [-0.05, 0, 0], rHa: [0.3, 0, 0], lSh: [-0.7, 0, 0.5], lEl: [-0.9, 0, 0], lHip: [-0.75, 0, 0.08], lKn: [0.85, 0, 0], rHip: [0.45, 0, -0.08], rKn: [0.4, 0, 0], hy: -0.2 }),
   block: pose({ spine: [0.12, 0.15, 0], neck: [-0.05, -0.15, 0], rSh: [-1.25, 0, 0.25], rEl: [-1.25, 0, 0], rHa: [0.65, 1.35, 0], lSh: [-1.0, 0, 0.1], lEl: [-1.4, 0, 0], lHip: [-0.42, 0, 0.06], lKn: [0.55, 0, 0], rHip: [0.32, 0, -0.08], rKn: [0.45, 0, 0], hy: -0.1 }),
   hurt: pose({ spine: [-0.45, 0, 0.15], neck: [-0.4, 0, 0], rSh: [-0.2, 0, -0.6], rEl: [-0.6, 0, 0], lSh: [-0.1, 0, 0.7], lEl: [-0.4, 0, 0], lHip: [0.2, 0, 0], lKn: [0.4, 0, 0], rHip: [-0.3, 0, 0], rKn: [0.5, 0, 0], hy: -0.08 }),
+  hurtB: pose({ spine: [0.55, 0, -0.12], neck: [0.35, 0, 0], rSh: [0.5, 0, -0.7], rEl: [-0.5, 0, 0], lSh: [0.6, 0, 0.8], lEl: [-0.3, 0, 0], lHip: [-0.5, 0, 0], lKn: [0.6, 0, 0], rHip: [0.3, 0, 0], rKn: [0.3, 0, 0], hy: -0.1 }),
+  down: pose({ spine: [-0.15, 0, 0.05], neck: [-0.3, 0.3, 0], rSh: [-0.4, 0, -1.2], rEl: [-0.4, 0, 0], lSh: [-0.3, 0, 1.1], lEl: [-0.6, 0, 0], lHip: [-0.6, 0, 0.12], lKn: [1.0, 0, 0], rHip: [-0.15, 0, -0.1], rKn: [0.35, 0, 0] }),
   dodge: pose({ spine: [0.32, 0, 0], neck: [-0.25, 0, 0], rSh: [-0.4, 0, -0.5], rEl: [-0.9, 0, 0], lSh: [-0.3, 0, 0.6], lEl: [-0.8, 0, 0], lHip: [-0.9, 0, 0], lKn: [1.2, 0, 0], rHip: [-0.35, 0, 0], rKn: [1.0, 0, 0], hy: -0.22 }),
   dead: pose({ spine: [-0.2, 0, 0], neck: [-0.5, 0.4, 0], rSh: [-2.6, 0, -0.6], rEl: [-0.2, 0, 0], lSh: [-2.4, 0, 0.7], lEl: [-0.3, 0, 0], lHip: [-0.2, 0, 0.1], rHip: [-0.1, 0, -0.15], lKn: [0.2, 0, 0], rKn: [0.3, 0, 0] }),
 };
@@ -1906,8 +2005,10 @@ const P = {
   pos: new V3(0, 0, 7), yaw: Math.PI, vel: new V3(), hp: 100, maxHp: 100, st: 100, maxSt: 100,
   drawn: false, state: 'idle', t: 0, step: 0, swing: null, swingType: '', times: null, queued: false, failed: false,
   hitSet: new Set(), iframes: 0, stunDur: 0, gait: 0, lastSg: 1, stDelay: 0, swapDone: false, swungSound: false, dodgeDir: new V3(),
-  combo: 0, comboT: 0, ghostHp: 100, gaitW: 0, bank: 0, prevYaw: Math.PI, visYaw: 0, seg: -1,
+  combo: 0, comboT: 0, ghostHp: 100, gaitW: 0, bank: 0, prevYaw: Math.PI, visYaw: 0, seg: -1, swingId: 0, hurtBack: false,
 };
+// knocked down or getting up: no control, no turning
+const isDown = () => P.state === 'dead' || P.state === 'down' || P.state === 'getup';
 
 // ============================================================ the Thornbeak (original creature)
 const PALETTES = [
@@ -2044,11 +2145,13 @@ class Beast {
     this.flash = 0; this.lookOff = 0; this.lookT = 0; this.seed = rand(0, 100); this.stagDur = 0.3; this.stagRoll = 0;
     this.pitch = rand(0.9, 1.1) - level * 0.015; this.dead = false; this.deadT = 0;
     this.lungeDir = new V3(); this.fwd = new V3(0, 0, 1);
+    // how well it reads the hero's wind-ups (medieval-sim's `skill`): rare at first, a real threat by round six
+    this.skill = Math.min(0.45, 0.04 + 0.07 * (level - 1)); this.reacted = -1;
     this.rig.root.position.copy(this.pos);
   }
   setState(s) { this.state = s; this.t = 0; this.hitDone = false; }
   forward() { return this.fwd.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)); }
-  takeHit(dmg, dir, heavy) {
+  takeHit(dmg, dir, heavy, flank = false) {
     if (this.dead) return;
     this.hp -= dmg; this.flash = 0.12;
     const hp = this.pos.clone().add(new V3(0, 1.25 * this.s, 0)).addScaledVector(dir, -0.5 * this.s);
@@ -2058,12 +2161,12 @@ class Beast {
     hitStop = heavy ? 0.12 : 0.07; shake = Math.max(shake, heavy ? 0.55 : 0.3); SFX.hit(heavy);
     if (this.hp <= 0) { this.die(dir); return; }
     this.hitChain = time - this.lastHit < 1.7 ? this.hitChain + 1 : 1; this.lastHit = time;
-    if (this.state === 'lunge' && !heavy) return; // hyper-armour mid-charge
-    if (this.hitChain >= 3 && !heavy && Math.random() < 0.5 * this.aggr) { // breaks the combo with a leap back
+    if (this.state === 'lunge' && !heavy && !flank) return; // hyper-armour mid-charge, except against a cut from behind
+    if (this.hitChain >= 3 && !heavy && !flank && Math.random() < 0.5 * this.aggr) { // breaks the combo with a leap back
       this.setState('hop'); this.iframes = 0.4; this.vel.copy(dir).multiplyScalar(7.5); SFX.squawk(this.pitch * 1.1);
       dust(this.pos, 8, 0.6, 1.4); return;
     }
-    this.setState('stagger'); this.stagDur = heavy ? 0.6 : 0.34; this.stagRoll = rand(-0.25, 0.25);
+    this.setState('stagger'); this.stagDur = heavy ? 0.6 : flank ? 0.5 : 0.34; this.stagRoll = rand(-0.25, 0.25);
     this.vel.addScaledVector(dir, heavy ? 5.5 : 2.6);
     if (Math.random() < 0.55) SFX.squawk(this.pitch);
   }
@@ -2093,6 +2196,17 @@ class Beast {
     const want = new V3(); let face = yawP, faceK = 6, velK = 6;
     const fwd = this.forward().clone();
     const facingErr = Math.abs(angWrap(yawP - this.yaw));
+    // reading the hero (after medieval-sim's fight()): every swing aimed at it gets one roll against its skill, made
+    // during the wind-up; on a success it springs aside and back, often pecking straight back in as it lands
+    if ((this.state === 'circle' || this.state === 'approach') && P.state === 'attack' && P.t < P.times.w && this.reacted !== P.swingId && dist < 3.4) {
+      this.reacted = P.swingId;
+      if (Math.abs(angWrap(yawTo(P.pos, this.pos) - P.yaw)) < 0.9 && Math.random() < this.skill) {
+        const side = Math.random() < 0.5 ? 1 : -1;
+        this.setState('hop'); this.iframes = 0.3;
+        this.vel.set(-dirP.z * side, 0, dirP.x * side).multiplyScalar(4.5).addScaledVector(dirP, -5);
+        SFX.squawk(this.pitch * 1.15); dust(this.pos, 6, 0.5, 1.1);
+      }
+    }
     switch (this.state) {
       case 'wait': want.set(0, 0, 0); face = 0; if (this.t > 0) { this.setState('enter'); } break;
       case 'enter': want.copy(fwd).multiplyScalar(3.8); face = this.pos.z < -16 ? 0 : yawP;
@@ -2230,21 +2344,48 @@ let hitStop = 0, slowMo = 0, shake = 0, time = 0, lockOn = true;
 const vignette = document.getElementById('vignette');
 let vignetteA = 0;
 
-function currentTarget() {
-  if (!P.drawn || !lockOn || P.state === 'dead') return null;
-  let best = null, bd = 15;
+// Lock-on (after medieval-sim's acquireLock): the lock is sticky. It stays on one beast until that beast dies or gets
+// out of range, instead of jumping to whichever beast is nearest this frame. A new lock takes the beast roughly in front,
+// nearest first (score = distance × (2.2 − facing)). A quick flick of the mouse switches to the next beast on that side.
+const LOCK_RANGE = 15;
+let lockTarget = null, flickX = 0, flickCd = 0;
+const lockable = e => e && !e.dead && e.state !== 'wait' && Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z) < LOCK_RANGE;
+function acquireLock() {
+  let best = null, bs = 1e9;
+  const fx = Math.sin(P.yaw), fz = Math.cos(P.yaw);
   for (const e of beasts) {
-    if (e.dead || e.state === 'wait') continue;
-    const d = Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z);
-    if (d < bd) { bd = d; best = e; }
+    if (!lockable(e)) continue;
+    const dx = e.pos.x - P.pos.x, dz = e.pos.z - P.pos.z, d = Math.hypot(dx, dz) || 1e-3;
+    const s = d * (2.2 - (dx * fx + dz * fz) / d);
+    if (s < bs) { bs = s; best = e; }
   }
   return best;
+}
+function currentTarget() {
+  if (!P.drawn || !lockOn || P.state === 'dead') { lockTarget = null; return null; }
+  if (!lockable(lockTarget)) lockTarget = acquireLock();
+  return lockTarget;
+}
+// side > 0: the next beast to the right of the current one (as seen from the hero), side < 0: to the left
+function switchTarget(side) {
+  const cur = currentTarget(); if (!cur) return false;
+  const a0 = yawTo(P.pos, cur.pos);
+  let best = null, ba = 1e9;
+  for (const e of beasts) {
+    if (e === cur || !lockable(e)) continue;
+    const da = angWrap(yawTo(P.pos, e.pos) - a0) * -side; // yaw decreases to the right
+    if (da > 0.05 && da < ba) { ba = da; best = e; }
+  }
+  if (!best) return false;
+  lockTarget = best; SFX.lockSwitch?.();
+  return true;
 }
 
 function hitPlayer(e, dmg, heavy) {
   if (P.state === 'dead' || P.iframes > 0) return false;
   const angTo = yawTo(P.pos, e.pos);
   const facing = Math.abs(angWrap(angTo - P.yaw)) < 1.25;
+  let guardBroken = false;
   const dir = new V3(P.pos.x - e.pos.x, 0, P.pos.z - e.pos.z).normalize();
   hero.root.updateMatrixWorld(true);
   if (P.state === 'block' && facing) {
@@ -2256,6 +2397,7 @@ function hitPlayer(e, dmg, heavy) {
       e.onBlocked(heavy); return true;
     }
     P.st = 0; SFX.block(); sparks(sp, 12); dmg = Math.round(dmg * 0.6); heavy = true; popText(sp, 'GUARD BROKEN', 'block');
+    guardBroken = true;
   }
   P.hp -= dmg;
   const hp = P.pos.clone().add(new V3(0, 1.35, 0));
@@ -2263,12 +2405,18 @@ function hitPlayer(e, dmg, heavy) {
   bloodBurst(hp, dir, 14);
   shake = Math.max(shake, heavy ? 0.6 : 0.35); hitStop = 0.06; vignetteA = 1;
   P.pain = Math.min(1.6, (P.pain || 0) + (heavy ? 1.2 : 0.8)); P.painSeed = rand(0, 10);
-  if (P.hp > 0) SFX.hurt(heavy);
   P.combo = 0;
   if (P.hp <= 0) { P.hp = 0; P.state = 'dead'; P.t = 0; SFX.scream(); P.pain = 2; P.vel.copy(dir).multiplyScalar(3); onPlayerDeath(); return true; }
-  P.state = 'hurt'; P.t = 0; P.stunDur = heavy ? 0.75 : 0.36;
-  P.vel.copy(dir).multiplyScalar(heavy ? 7.5 : 3);
   trail.samples.length = 0; hero.bladeMat.emissive.setRGB(0, 0, 0);
+  // a charge that lands clean knocks him flat on his back (Gothic's knock-down): he lies there until he gets up
+  // (Space, attack or W after a moment, or on his own), untouchable while he is down and for a moment after
+  if (e.state === 'lunge' && !guardBroken) {
+    P.state = 'down'; P.t = 0; P.iframes = 0.5; P.vel.copy(dir).multiplyScalar(6.5); SFX.knockdown(); dust(P.pos, 10, 0.6, 1.2);
+    return true;
+  }
+  SFX.hurt(heavy);
+  P.state = 'hurt'; P.t = 0; P.stunDur = heavy ? 0.75 : 0.36; P.hurtBack = !facing; // hit from behind: pitched forward
+  P.vel.copy(dir).multiplyScalar(heavy ? 7.5 : 3);
   return true;
 }
 
@@ -2282,9 +2430,12 @@ function checkPlayerHits() {
     P.hitSet.add(e);
     if (e.iframes > 0) { SFX.whiff(); continue; }
     const heavy = P.swingType === 'heavy';
-    const dmg = Math.round(17 * P.swing.dmg * (1 + P.step * 0.12) * rand(0.92, 1.08));
+    // a cut from behind (the hero is in the beast's back half) bites deeper and always staggers it
+    const bf = e.forward(), flank = -(bf.x * dx + bf.z * dz) / Math.max(d, 1e-3) < -0.35;
+    const dmg = Math.round(17 * P.swing.dmg * (1 + P.step * 0.12) * (flank ? 1.35 : 1) * rand(0.92, 1.08));
     P.combo++; P.comboT = 2.2;
-    e.takeHit(dmg, new V3(dx, 0, dz).normalize(), heavy);
+    if (flank) popText(e.pos.clone().add(new V3(0, 1.9 * e.s, 0)), 'FROM BEHIND', 'timing');
+    e.takeHit(dmg, new V3(dx, 0, dz).normalize(), heavy, flank);
   }
 }
 
@@ -2293,6 +2444,7 @@ function startAttack(step, lf, rt, target) {
   if (step < 3) { if (lf) type = 'rl'; else if (rt) type = 'lr'; }
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
+  P.swingId++;
   P.hitSet.clear();
   const sp = Math.max(0.72, Math.pow(0.93, step)) * (sw.slow || 1);
   P.times = { w: 0.21 * sp * (sw.wMul || 1), a: 0.11 * sp * (sw.aMul || 1), r: 0.42 * sp };
@@ -2307,6 +2459,7 @@ function updatePlayer(dt) {
   P.visYaw = 0;
   P.iframes = Math.max(0, P.iframes - dt); P.stDelay -= dt;
   P.comboT -= dt; if (P.comboT <= 0) P.combo = 0;
+  flickCd -= dt; flickX *= Math.exp(-10 * dt); // a flick has to be quick, slow drift doesn't add up
   const fw = keys.KeyW || keys.ArrowUp, bw = keys.KeyS || keys.ArrowDown;
   const lf = keys.KeyA || keys.ArrowLeft, rt = keys.KeyD || keys.ArrowRight;
   const sl = keys.KeyQ, sr = keys.KeyE;
@@ -2410,8 +2563,24 @@ function updatePlayer(dt) {
       break;
     }
     case 'hurt': {
-      P.t += dt; tp = POSE.hurt; k = 18; velK = 5;
+      P.t += dt; tp = P.hurtBack ? POSE.hurtB : POSE.hurt; k = 18; velK = 5;
       if (P.t > P.stunDur) P.state = 'idle';
+      break;
+    }
+    case 'down': { // flat on his back in the sand
+      P.t += dt; tp = POSE.down; k = 9; velK = 4;
+      hero.root.rotation.x = damp(hero.root.rotation.x, -1.45, 9, dt);
+      hero.root.position.y = damp(hero.root.position.y, groundH(P.pos.x, P.pos.z) + 0.12, 9, dt);
+      P.iframes = Math.max(P.iframes, 0.5);
+      if (P.t > 2.4 || (P.t > 0.7 && (wantDodge || wantAttack || fw))) { P.state = 'getup'; P.t = 0; SFX.dodge(); dust(P.pos, 6, 0.4, 0.8); }
+      break;
+    }
+    case 'getup': { // rolls up onto his feet, still crouched, then back on guard
+      P.t += dt; tp = POSE.dodge; k = 12; velK = 10;
+      hero.root.rotation.x = damp(hero.root.rotation.x, 0, 11, dt);
+      hero.root.position.y = damp(hero.root.position.y, groundH(P.pos.x, P.pos.z), 11, dt);
+      P.iframes = Math.max(P.iframes, 0.3);
+      if (P.t > 0.5) { P.state = 'idle'; hero.root.rotation.x = 0; }
       break;
     }
     case 'dead': {
@@ -2507,7 +2676,7 @@ function updatePlayer(dt) {
   const l = Math.hypot(P.pos.x, P.pos.z);
   if (l > ARENA_R) { P.pos.x *= ARENA_R / l; P.pos.z *= ARENA_R / l; }
   hero.root.position.x = P.pos.x; hero.root.position.z = P.pos.z;
-  if (P.state !== 'dead') { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
+  if (!isDown()) { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
   hero.root.rotation.y = P.yaw + P.visYaw;
   hero.root.updateMatrixWorld(true);
   if (P.state === 'attack') {
@@ -2584,13 +2753,16 @@ function begin() {
   initAudio();
   $('overlay').classList.add('hidden');
   resetGame();
-  renderer.domElement.requestPointerLock?.();
+  lockPointer();
 }
 $('startBtn').onclick = begin;
 
 // ============================================================ pause menu
-const settings = { sens: 1, sound: 0.6 };
+const settings = { sens: 1, sound: 0.6, bright: 1, weather: 'dynamic' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('arena-settings') || '{}')); } catch (e) { /* storage unavailable */ }
+// brightness (like medieval-sim's): scales the tone-mapping exposure, so it lifts the gloom without washing out the sky
+const applyBright = () => { renderer.toneMappingExposure = 0.9 * settings.bright; };
+applyBright();
 const saveSettings = () => { try { localStorage.setItem('arena-settings', JSON.stringify({ ...settings, music: Music.volume, lockOn })); } catch (e) { /* ignore */ } };
 try { const st = JSON.parse(localStorage.getItem('arena-settings') || '{}'); if (typeof st.lockOn === 'boolean') lockOn = st.lockOn; if (typeof st.music === 'number') Music.setVolume(st.music); } catch (e) { /* ignore */ }
 let paused = false, resumeGuard = 0;
@@ -2600,6 +2772,7 @@ function pauseGame() {
   paused = true;
   for (const k in keys) keys[k] = false; mouseR = false;
   $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
+  $('optBright').value = settings.bright; $('optWeather').value = settings.weather;
   $('pause').classList.remove('hidden');
   if (document.pointerLockElement) document.exitPointerLock();
   Music.duck(true);
@@ -2610,7 +2783,7 @@ function resumeGame() {
   $('pause').classList.add('hidden');
   Music.duck(false);
   last = performance.now();
-  renderer.domElement.requestPointerLock?.()?.catch?.(() => {});
+  lockPointer();
 }
 $('resumeBtn').onclick = resumeGame;
 $('restartBtn').onclick = () => { resumeGame(); resetGame(); };
@@ -2618,12 +2791,17 @@ $('optMusic').oninput = e => { Music.setVolume(+e.target.value); saveSettings();
 $('optSound').oninput = e => { settings.sound = +e.target.value; if (master) master.gain.value = settings.sound; saveSettings(); };
 $('optSens').oninput = e => { settings.sens = +e.target.value; saveSettings(); };
 $('optLock').onchange = e => { lockOn = e.target.checked; saveSettings(); };
+$('optBright').oninput = e => { settings.bright = +e.target.value; applyBright(); saveSettings(); };
+$('optWeather').onchange = e => { settings.weather = e.target.value; saveSettings(); };
 // losing pointer lock (the browser eats the first Esc press) or the window losing focus pauses the game
 document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement && performance.now() - resumeGuard > 300) pauseGame();
 });
 addEventListener('blur', () => pauseGame());
-document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+// a hidden tab goes silent (medieval-sim does the same), so two open tabs never play over each other
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { pauseGame(); AC?.suspend(); } else AC?.resume();
+});
 
 // ============================================================ input
 const keys = {}; const pressed = new Set(); let mouseR = false;
@@ -2642,19 +2820,30 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; });
 renderer.domElement.addEventListener('mousedown', e => {
   if (game.state === 'title' || paused) return;
-  if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock?.();
+  if (document.pointerLockElement !== renderer.domElement) lockPointer();
   if (e.button === 0) pressed.add('Attack');
   if (e.button === 2) mouseR = true;
   if (e.button === 1) { lockOn = !lockOn; e.preventDefault(); }
 });
 addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; });
 addEventListener('contextmenu', e => e.preventDefault());
-let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8;
+let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8, lookBack = false;
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
-  if (!currentTarget() && P.state !== 'dead' && P.state !== 'attack') P.yaw -= e.movementX * 0.0024 * settings.sens;
-  camPitch = clamp(camPitch + e.movementY * 0.0018 * settings.sens, -0.75, 0.85);
+  const mx = e.movementX, my = e.movementY;
+  if (Math.abs(mx) > 300 || Math.abs(my) > 300) return; // Chrome on Windows sometimes reports huge bogus jumps under pointer lock
+  if (currentTarget()) { // locked on: the mouse doesn't turn the hero, but a quick flick switches target
+    flickX += mx * settings.sens;
+    if (Math.abs(flickX) > 140 && flickCd <= 0) { if (switchTarget(Math.sign(flickX))) flickCd = 0.35; flickX = 0; }
+  } else if (!isDown() && P.state !== 'attack') P.yaw -= mx * 0.0024 * settings.sens;
+  camPitch = clamp(camPitch + my * 0.0018 * settings.sens, -0.75, 0.85);
 });
+// raw (unaccelerated) mouse deltas where the browser supports them, so turning doesn't depend on OS mouse acceleration
+function lockPointer() {
+  const el = renderer.domElement;
+  try { const r = el.requestPointerLock?.({ unadjustedMovement: true }); if (r && r.catch) r.catch(() => el.requestPointerLock?.()?.catch?.(() => {})); }
+  catch (e) { try { el.requestPointerLock?.(); } catch (e2) { /* not allowed right now */ } }
+}
 addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) * 0.4, 2.8, 9); }, { passive: true });
 
 // ============================================================ camera / hud / pops
@@ -2683,7 +2872,10 @@ function updateCamera(dt) {
     return;
   }
   const target = currentTarget();
-  camYaw = dampAng(camYaw, P.yaw, target ? 7 : 5, dt);
+  // hold R to look back over your shoulder (medieval-sim's look-back); the view snaps round and snaps back
+  const back = !!keys.KeyR && !target && !isDown(), wantYaw = P.yaw + (back ? Math.PI : 0), snap = back !== lookBack;
+  lookBack = back;
+  camYaw = snap ? wantYaw : dampAng(camYaw, wantYaw, target ? 7 : 5, dt);
   const hor = camDist * Math.cos(camPitch), h = 1.55 + camDist * Math.sin(camPitch);
   const cp = new V3(P.pos.x - Math.sin(camYaw) * hor, h, P.pos.z - Math.cos(camYaw) * hor);
   const rl = Math.hypot(cp.x, cp.z);
@@ -2693,6 +2885,7 @@ function updateCamera(dt) {
   const look = new V3(P.pos.x, 1.45, P.pos.z).addScaledVector(new V3(Math.sin(camYaw), 0, Math.cos(camYaw)), 1.2);
   if (target) look.lerp(new V3(target.pos.x, 1.2, target.pos.z), 0.22 * (1 - gazeUp / 1.38));
   look.y += Math.tan(gazeUp) * (hor + 1.2);
+  if (snap) { camLook.copy(look); camera.position.copy(cp); }
   camLook.lerp(look, 1 - Math.exp(-10 * dt));
   camera.position.lerp(cp, 1 - Math.exp(-14 * dt));
   if (shake > 0) { camera.position.add(new V3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(shake * 0.12)); shake = Math.max(0, shake - dt * 2.2); }
@@ -2703,7 +2896,7 @@ function updateHUD(dt) {
   $('php').querySelector('.fill').style.transform = `scaleX(${P.hp / P.maxHp})`;
   $('php').querySelector('.ghost').style.transform = `scaleX(${P.ghostHp / P.maxHp})`;
   $('pst').querySelector('.fill').style.transform = `scaleX(${Math.max(0, P.st) / P.maxSt})`;
-  $('stance').textContent = P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : 'UNARMED — PRESS F';
+  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : 'UNARMED — PRESS F';
   const tgt = currentTarget() || beasts.find(e => !e.dead && e.state !== 'wait');
   const eb = $('ebox');
   if (tgt && game.state !== 'title') {
@@ -2713,6 +2906,13 @@ function updateHUD(dt) {
     $('ebar').querySelector('.ghost').style.transform = `scaleX(${Math.max(0, tgt.ghostHp) / tgt.maxHp})`;
     $('ename').textContent = tgt.name;
   } else eb.style.opacity = 0;
+  // a small gold chevron over the locked beast's head
+  const lm = $('lockmark'), lt = currentTarget();
+  if (lt && game.state !== 'title') {
+    const v = tmpV2.set(lt.pos.x, groundH(lt.pos.x, lt.pos.z) + 2.6 * lt.s, lt.pos.z).project(camera);
+    const x = (v.x * 0.5 + 0.5) * innerWidth, y = (-v.y * 0.5 + 0.5) * innerHeight + Math.sin(time * 5) * 3;
+    lm.style.transform = `translate(${x - 6}px,${y - 12}px) rotate(45deg)`; lm.style.opacity = v.z < 1 ? 1 : 0;
+  } else lm.style.opacity = 0;
   const c = $('combo');
   if (P.combo >= 2) { c.querySelector('.n').textContent = P.combo + '×'; c.querySelector('.t').textContent = 'CHAIN'; c.style.opacity = Math.min(1, P.comboT); }
   else c.style.opacity = 0;
@@ -2763,15 +2963,21 @@ function drawFrame() {
 function loop(now) {
   requestAnimationFrame(loop);
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (paused) { Weather.silence(); drawFrame(); pressed.clear(); return; }
+  tick(rdt);
+  drawFrame();
+  pressed.clear();
+}
+// one step of the world, without drawing (rdt: real seconds; dt: game seconds, slowed by hit-stop and slow motion)
+function tick(rdt) {
   let dt = rdt;
-  if (paused) { drawFrame(); pressed.clear(); return; }
   if (hitStop > 0) { hitStop -= rdt; dt *= 0.06; }
   else if (slowMo > 0) { slowMo -= rdt; dt *= 0.35; }
   time += dt;
 
   if (game.state !== 'title') {
     updatePlayer(dt);
-    for (const e of beasts) e.update(dt);
+    if (!window.__freezeAI) for (const e of beasts) e.update(dt);
     separate();
     if (game.state === 'between') {
       game.betweenT -= rdt;
@@ -2782,6 +2988,7 @@ function loop(now) {
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
   updateTorches(dt, time);
+  Weather.update(dt, time);
   barrier.update(dt, time); sky.material.uniforms.time.value = time;
   clockEl.crackle -= rdt;
   if (clockEl.crackle <= 0 && AC) { clockEl.crackle = rand(0.05, 0.35); SFX.crackle?.(); }
@@ -2792,9 +2999,16 @@ function loop(now) {
   updateCamera(rdt);
   sky.position.copy(camera.position);
   updateHUD(rdt); updatePops(rdt);
-  drawFrame();
-  pressed.clear();
 }
+// debug hooks (like medieval-sim's): ?auto=1 skips the title screen; window.__game exposes the state, and
+// __game.step(seconds) runs the world in 1/60 s steps without drawing, for quick tests; __freezeAI = true stops the beasts
+window.__game = {
+  P, beasts, hero, camera, scene, THREE, game, settings, Weather, POSE,
+  startRound, resetGame, startAttack, hitPlayer, currentTarget, switchTarget, acquireLock, barrierSpawn: barrier.spawn,
+  get lockTarget() { return lockTarget; }, get lockOn() { return lockOn; }, set lockOn(v) { lockOn = v; },
+  press(code) { pressed.add(code); }, hold(code, v = true) { keys[code] = v; },
+  step(seconds, fps = 60) { for (let i = 0; i < Math.round(seconds * fps); i++) { tick(1 / fps); pressed.clear(); } },
+};
 SFX.crackle = () => nz({ dur: 0.03, type: 'highpass', f0: 2200, f1: 3200, gain: rand(0.01, 0.04) });
 // ============================================================ loading: build + warm up every shader before play
 // Physical materials (clearcoat/sheen) are slow to compile on Windows/ANGLE; doing it here instead of
@@ -2837,5 +3051,6 @@ async function preload() {
   $('overlay').classList.remove('hidden');
   last = performance.now();
   requestAnimationFrame(loop);
+  if (new URLSearchParams(location.search).has('auto')) begin();
 }
 preload();
