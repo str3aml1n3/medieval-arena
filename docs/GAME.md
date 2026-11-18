@@ -58,8 +58,9 @@ names). Animation is procedural:
 - **Bars:** Gothic-style bars (`barSkins`). The worn iron frame with tapered, riveted ends is a canvas used as a CSS `border-image`. The grainy, bevelled fills are canvases too, and they are cut by `clip-path` rather than squeezed.
 - **Worn UI:** `uiSkins()` draws a grain texture, a quieter backdrop grain and two wear masks (chips, pits, scratches) and hands them to CSS as variables. Big lettering is a rubbed gold gradient clipped to the text and eroded by the wear mask; buttons, touch buttons and panels get the grain and a lighter wear.
 - **Wet ground:** `wetGround()` patches the ground materials. A world-space noise mask decides which hollows go dark and glossy first as the rain soaks in (`groundWet`), and `rebakeEnv()` re-captures the sky reflection whenever the cloud cover changes by 0.2, so wet ground reflects a grey sky, not a blue one.
-- **Contact shadows:** cheap ambient occlusion baked into vertex colours. The ground darkens where it runs in under the palisade, inside and out, and the palisade logs are darker at their bases.
 - **Build stamp:** `version.js` (build number and UTC date) is shown on the loading, title and pause screens. `tools/bump_version.py` bumps it.
+- **Hero detail:** the leather, the boots and the hair get procedural detail textures (`triplanarDetail`): pebbled grain with creases and scuffs, or strands gathered in tufts. The model has no UVs, so they're projected from three sides. The bump comes from the texture's own slope, so it stays smooth at any resolution. Ball-joint fillers on the torso hide the gap between the shoulder and the arm.
+- **Mountains:** one ring of terrain pushed up by ridged noise, with vertex colours for the forested foothills, the rock and the snow.
 - **Reflections:** materials avoid the plastic look. There's no clearcoat on the armour, leather or boots; the stone and roof sheen is neutral and weaker; and the sky reflection on dull surfaces is turned down. A patch to `lights_fragment_end` adds approximate specular occlusion: the sky reflection on non-metals fades with the direct light reaching the point, down to a third in full shadow.
 - **Grass:** each tuft is a clump of 11 curved, tapering blades with vertex colours, swaying in the wind in the vertex shader (`grassWind`). The tufts skip the depth pre-pass, which would draw them without the sway. Short tufts also grow in the arena's green patches.
 - **Arena floor:** `arenaPatches(x, z)` gives the gravel, green and track weights that tint the floor and place those tufts.
@@ -86,6 +87,11 @@ wind-up. Each round raises HP, damage (`dmgMul`), aggression (`aggr`) and the nu
 - **From behind:** a cut landing in the beast's back half does 1.35× damage, always staggers it, and gets past both the
   hyper-armour and the combo breaker.
 
+## Day and night (`Daylight`)
+The sun follows the player's clock. It rises at 6:00, peaks at about 54° at noon, and sets at 18:00, with a golden hour around sunrise and sunset. `SUN_DIR` drives the sky shader (sun disc, orange horizon, cloud undersides, darkening, stars, the moon opposite the sun) and the single directional light. That light is the sun by day and a dim blue moon by night. The fog, the sky and ground light, the exposure and the torches all follow. `Daylight.update()` runs every 2 s. `?hour=21.5` (or `__game.setHour`) fixes the time.
+
+**Shadows** are real sun or moon shadows from the shadow map. The map is re-rendered every other frame. Nothing is baked.
+
 ## Weather (`Weather`)
 After medieval-sim's weather. In **Changing** mode (the default), dry spells (100–220 s) and showers (60–130 s) take
 turns. `cloud` moves toward 0 or 1 over about 28 s. `rain` follows it once the cloud cover passes half, and `wet`
@@ -101,12 +107,18 @@ soaks in quickly and dries over about a minute. Together they drive:
 
 **Dry** and **Rain** in the pause menu force one or the other.
 
+## Light shafts (`Shafts`)
+These are screen-space volumetric light. A quarter-resolution pass draws the sun as a bright disc with every opaque mesh in black in front of it, and is redrawn every other frame. A radial blur from the sun's screen position is then added over the frame. The pass is skipped when the sun is behind the camera, has set, or is hidden by cloud; the pause menu can also turn it off.
+
 ## Barrier
+`Weather.agitation` (clouds and rain) controls how agitated the dome is. Under a clear sky it is faint and patchy, it moves slowly, and strikes are rare. In a storm it surfaces widely, seethes faster on its own clock, and strikes come every second or two, often in bursts.
 The barrier is a dome shader: a veined, breathing membrane that only shows in drifting patches. Lightning arcs are
 random walks along the sphere, and each one also rings the dome and lights the clouds. As in medieval-sim, 75 % of the
 strikes land where the camera is looking, and the crackle is panned toward the strike.
 
 ## Audio
+There are **three music themes**. *Day* is the calm D-minor piece. *Night* is emptier and darker: a hushed drone, the choir breathing in and out, falling harp notes and a rare recorder. *Combat* is in the Gothic battle style: driving staccato strings, war drums on and off the beat, horn calls and timpani rolls. Themes change on a bar line and their layers cross-fade; combat cuts in at the next bar. At night, **crickets** chirp around the arena (`Ambience`). They go quiet in rain and while the game is paused.
+
 All sound effects are synthesized (`nz` filtered noise, `tn` tones, `voice` formant synthesis for the hero's cries).
 `nz` can pan. The score is MIDI note data played on sampled General MIDI instruments, and its intensity follows the
 fight. A hidden tab suspends the AudioContext.

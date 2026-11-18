@@ -181,9 +181,9 @@ const barrier = (() => {
   // light pulses stream along the veins, the whole skin slowly breathes, and it only shows in drifting patches.
   const mat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
-    uniforms: { time: { value: 0 }, hits: { value: hits }, noiseTex: { value: noiseTex } },
+    uniforms: { time: { value: 0 }, hits: { value: hits }, noiseTex: { value: noiseTex }, agit: { value: 0 } },
     vertexShader: `varying vec3 vN; void main(){ vN = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-    fragmentShader: `varying vec3 vN; uniform float time; uniform vec4 hits[${HITS}];
+    fragmentShader: `varying vec3 vN; uniform float time; uniform float agit; uniform vec4 hits[${HITS}];
       float hash(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
       vec3 hash3(vec3 p){ return vec3(hash(p), hash(p + 31.7), hash(p + 71.3)); }
       uniform sampler2D noiseTex;
@@ -203,7 +203,8 @@ const barrier = (() => {
         vec3 p = n * 4.0;
         // the skin only surfaces in a few drifting patches; they swell, fade and wander so it is never visible everywhere
         float pn = fbm(p * 0.38 + vec3(t * 0.02, -t * 0.03, t * 0.015)) + 0.12 * sin(t * 0.21 + n.x * 3.0);
-        float veil = smoothstep(0.56, 0.74, pn);
+        // agit (0 clear sky .. 1 storm): calm, faint and patchy under a clear sky; in rain it surfaces widely and seethes
+        float veil = smoothstep(0.6 - 0.14 * agit, 0.76 - 0.12 * agit, pn);
         float base = exp(-max(n.y, 0.0) * 8.0) * smoothstep(0.45, 0.7, pn + 0.08); // thickest where it sinks into the land, also in patches
         float vis = veil * 0.45 + base * 0.55;
         // most of the dome is invisible most of the time: skip all the expensive vein work there unless a strike is near
@@ -221,7 +222,7 @@ const barrier = (() => {
         float flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(dot(q, vec3(1.3, 2.1, 0.7)) * 2.2 - t * 1.6), 3.0);
         float memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35;      // faint walls of the cells
         float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
-        float I = (veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe;
+        float I = ((veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe) * (0.55 + 0.9 * agit);
         for (int i = 0; i < ${HITS}; i++) {
           float age = hits[i].w; if (age > 3.0) continue;
           float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0)) + (w.y - 0.5) * 0.04; // wobbly, not a perfect circle
@@ -247,7 +248,7 @@ const barrier = (() => {
     });
     arcs.push({ layers, life: 0, max: 0, seed: 0 });
   }
-  let nextArc = 1.5, hitIdx = 0;
+  let nextArc = 1.5, hitIdx = 0, ownT = 0;
   const tmp = new V3(), t1 = new V3(), t2 = new V3();
   function walk(out, start, dir, steps, jag) {
     const p = start.clone(); let d = dir.clone();
@@ -290,10 +291,14 @@ const barrier = (() => {
   return {
     spawn,
     update(dt, time) {
-      mat.uniforms.time.value = time;
+      // its own clock runs faster as the weather worsens, so the veins stream and breathe faster without jumping
+      const ag = Weather.agitation; mat.uniforms.agit.value = ag; ownT += dt * (0.6 + 2.2 * ag); mat.uniforms.time.value = ownT;
       for (const h of hits) h.w += dt;
-      nextArc -= dt * (1 + 1.5 * Weather.rain); // the barrier is restless in a storm
-      if (nextArc <= 0) { spawn(); if (Math.random() < 0.3) spawn(); nextArc = rand(0.8, 4); }
+      nextArc -= dt;
+      if (nextArc <= 0) { // rare under a clear sky, frequent (often in bursts) in a storm
+        spawn(); if (Math.random() < 0.15 + 0.45 * ag) spawn();
+        nextArc = lerp(rand(4, 11), rand(0.4, 1.8), ag);
+      }
       for (const a of arcs) {
         if (a.life <= 0) continue;
         a.life -= dt;
@@ -445,10 +450,7 @@ const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 150, 56), sand
   let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
   const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
   const gn = P0.green * 0.85; c = c.map((k, i) => lerp(k, v * [0.46, 0.54, 0.32][i], gn));       // muddy green
-  // contact shadow (baked ambient occlusion): the ground darkens as it runs in under the palisade and the stone walls,
-  // so the wall sits in the earth instead of standing on it
-  const ao = 1 - 0.62 * smoothstep(16.6, 18.35, r) - 0.12 * smoothstep(14.5, 17, r);
-  return c.map(k => k * ao);
+  return c;
 });
 sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't sheen across it
 // Wet ground (rain): wetness isn't even. Two octaves of world-space noise make a wetness mask; as the ground soaks, the
@@ -474,7 +476,7 @@ const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grai
 const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 120, 60), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
   const worn = Math.exp(-((r - 22) ** 2) / 8) * 0.5 + (Math.abs(x) < 4 && z < -18 ? 0.5 : 0); // trampled ring + road edge
-  const dry = clamp(d * 0.6 + worn, 0, 1), b = (0.85 + m * 0.3) * (1 - 0.5 * (1 - smoothstep(18.9, 20.4, r))); // contact shadow outside the wall
+  const dry = clamp(d * 0.6 + worn, 0, 1), b = 0.85 + m * 0.3;
   return [lerp(0.8, 1.25, dry) * b, lerp(1, 0.92, dry) * b, 0.83 * b];
 });
 wetGround(grassFloor.material, 0.6);
@@ -604,7 +606,6 @@ const woodTex = canvasTex(256, (g, s) => {
   weather(g, s, { streaks: 14, damp: 0.35, dampA: 0.5, blotches: 14, moss: 0.3, grit: 1500 });
 });
 const logMat = surfMat(woodTex, 0.95, 2.5);
-const logMatAO = logMat.clone(); logMatAO.vertexColors = true; // the palisade logs, with their bases darkened
 const darkWood = surfMat(woodTex, 0.93, 2.5, 0, { color: 0x8a7a6a });
 
 // rough, pitted rust for every bit of old iron
@@ -841,11 +842,7 @@ const metalRough = (() => {
   }
   sbox(5.8, 1.3, 1.6, Math.PI, R + 0.1, 7.0);
   bakeStatic(masonry);
-  // the bottom of every log is darker where it goes into the earth (vertex colours: a cheap, baked ambient occlusion)
-  const logGeo = new THREE.CylinderGeometry(0.27, 0.31, 1, 9, 8), lp = logGeo.attributes.position, lc = new Float32Array(lp.count * 3);
-  for (let i = 0; i < lp.count; i++) { const k = 0.42 + 0.58 * smoothstep(-0.5, -0.36, lp.getY(i)); lc[i * 3] = lc[i * 3 + 1] = lc[i * 3 + 2] = k; }
-  logGeo.setAttribute('color', new THREE.BufferAttribute(lc, 3));
-  const logs = new THREE.InstancedMesh(logGeo, logMatAO, pts.length);
+  const logs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.27, 0.31, 1, 9), logMat, pts.length);
   const tips = new THREE.InstancedMesh(new THREE.ConeGeometry(0.27, 0.7, 9), logMat, pts.length);
   const d = new THREE.Object3D();
   pts.forEach((p, i) => {
@@ -1083,7 +1080,6 @@ function buildTown() {
   const clothM = std(0x5e1812, 0.95, 0, { side: THREE.DoubleSide });
   const hillM = std(0x48582e, 1);
   const pineM = std(0x263a22, 0.9), trunkM = std(0x3a2a1c, 0.9);
-  const mountM = std(0x5a6774, 1), snowM = std(0xe4e8ee, 0.6);
 
   const crenels = (parent, len, y, z, step = 2.2) => { for (let x = -len / 2 + 0.6; x < len / 2; x += step) mesh(box(1.1, 1.3, 0.9), stoneM, parent, [x, y + 0.65, z]); };
   function roundTower(parent, x, z, r, h, roofH, base = 0) {
@@ -1272,12 +1268,38 @@ function buildTown() {
     mesh(new THREE.CylinderGeometry(0.3 * s, 0.4 * s, 3 * s, 6), trunkM, tmp, [x, gy + 1.5 * s, z]);
     for (let k = 0; k < 3; k++) mesh(cone((3 - k * 0.7) * s, 4 * s, 8), pineM, tmp, [x, gy + (3 + k * 2.4) * s, z]);
   }
-  for (let i = 0; i < 22; i++) {
-    const a = (i / 22) * Math.PI * 2 + rand(-0.1, 0.1), r = rand(185, 215), h = rand(45, 90), rad = rand(40, 65);
-    mesh(cone(rad, h, 7), mountM, tmp, [Math.sin(a) * r, h / 2 - 3, Math.cos(a) * r], [0, rand(0, 3), 0]);
-    mesh(cone(rad * 0.32, h * 0.32, 7), snowM, tmp, [Math.sin(a) * r, h - 3 - h * 0.16 + 0.3, Math.cos(a) * r], [0, rand(0, 3), 0]);
-  }
   bakeStatic(tmp);
+  // The mountains: one ring of terrain around the valley, pushed up by ridged noise into peaks, ridges and saddles
+  // (sharp crests where the noise folds), with forested foothills, grey rock, and snow on the high ground that thins on
+  // steep faces. Vertex colours only; the haze does the rest.
+  {
+    const geo = new THREE.RingGeometry(160, 255, 260, 30); geo.rotateX(-Math.PI / 2);
+    const p = geo.attributes.position, col = new Float32Array(p.count * 3);
+    const ridge = (x, z) => { let s = 0, a = 0.5, f = 1; for (let o = 0; o < 5; o++) { const n = 1 - Math.abs(noise2(x * f, z * f) * 2 - 1); s += a * n * n; f *= 2.1; a *= 0.5; } return s; };
+    const H = new Float32Array(p.count);
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i), r = Math.hypot(x, z);
+      const rise = smoothstep(160, 200, r) * (1 - 0.25 * smoothstep(225, 255, r));            // up from the valley floor
+      const range = 0.55 + 0.45 * fbm2(x * 0.006 + 11, z * 0.006 - 4, 2);                       // some stretches higher
+      const h = rise * range * (ridge(x * 0.011 + 40, z * 0.011 + 40) * 105 + 6) - 4;
+      H[i] = h; p.setY(i, h);
+    }
+    geo.computeVertexNormals();
+    const nr = geo.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      const h = H[i], up = nr.getY(i), x = p.getX(i), z = p.getZ(i);
+      const forest = 1 - smoothstep(8, 26, h), snowLine = 46 + fbm2(x * 0.03, z * 0.03, 2) * 18;
+      const snow = smoothstep(snowLine, snowLine + 10, h) * smoothstep(0.45, 0.75, up);       // snow settles on the gentler slopes
+      const rock = 0.3 + fbm2(x * 0.05 + 3, z * 0.05, 2) * 0.12;
+      let c = [rock * 0.95, rock * 1.0, rock * 1.08];
+      c = c.map((k, j) => lerp(k, [0.13, 0.17, 0.12][j], forest));
+      c = c.map((k, j) => lerp(k, [0.86, 0.89, 0.93][j], snow));
+      col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2];
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    const m = new THREE.Mesh(geo, std(0xffffff, 0.95, 0, { vertexColors: true, envMapIntensity: 0.4 }));
+    m.receiveShadow = false; scene.add(m);
+  }
 }
 // merge all static geometry by material and region → few draw calls, and only for what is actually in view
 function bakeStatic(group) {
@@ -1594,7 +1616,7 @@ const Weather = (() => {
   const FOG_D = 0.0058; // fog colours come from the time of day (Daylight)
   const smooth = x => x * x * (3 - 2 * x);
   // surfaces that get wet: [material, dry roughness]
-  const wetMats = [stoneM, logMat, logMatAO, darkWood].map(m => [m, m.roughness]); // the ground has its own, patchy wetness (wetGround)
+  const wetMats = [stoneM, logMat, darkWood].map(m => [m, m.roughness]); // the ground has its own, patchy wetness (wetGround)
   let bakedOC = 0, bakedDay = 1, bakedDusk = 0;
   const N = 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
   const pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
@@ -1669,7 +1691,28 @@ const Weather = (() => {
     wx, update, initAudio,
     silence() { setLevel(0); },
     get rain() { return wx.rain; },
+    get agitation() { return clamp(wx.cloud * 0.45 + wx.rain * 0.55, 0, 1); }, // how disturbed the barrier is
   };
+})();
+
+// ============================================================ night ambience: crickets
+// A handful of crickets around the arena, each with its own pitch, rhythm and place in the stereo field. A chirp is a
+// few very short, high pulses. They sing at night, fall silent in the rain, and stop while the game is paused.
+const Ambience = (() => {
+  const crickets = Array.from({ length: 5 }, (_, i) => ({ f: rand(3900, 5200), period: rand(0.55, 1.3), pulses: 2 + (Math.random() * 3 | 0), gap: rand(0.035, 0.05), pan: rand(-0.9, 0.9), vol: rand(0.5, 1), t: rand(0, 2), rest: 0 }));
+  function update(dt) {
+    if (!AC) return;
+    const level = Daylight.st.night * (1 - Weather.rain) * (game.state === 'title' ? 0.6 : 1);
+    if (level < 0.05) return;
+    for (const c of crickets) {
+      if ((c.t -= dt) > 0) continue;
+      c.t = c.period * rand(0.85, 1.15);
+      if (c.rest > 0) { c.rest--; continue; }
+      if (Math.random() < 0.06) c.rest = 3 + (Math.random() * 6 | 0); // now and then one pauses for a few beats
+      for (let k = 0; k < c.pulses; k++) tn({ dur: 0.02, f0: c.f, f1: c.f * 0.97, gain: 0.014 * level * c.vol, attack: 0.003, delay: k * c.gap, pan: c.pan });
+    }
+  }
+  return { update };
 })();
 
 // ============================================================ audio (synthesized)
@@ -1709,13 +1752,14 @@ const Music = (() => {
   const ORDER = ['strings', 'choir', 'harp', 'recorder', 'drum', 'lute', 'timp', 'horn', 'pizz', 'bell'];
   const NAMES = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
   const noteName = n => NAMES[n % 12] + (Math.floor(n / 12) - 1);
-  let ctx, out, layers = {}, nextT = 0, step = 0, on = true, vol = 0.8, intensity = -1, ducked = false;
+  let ctx, out, layers = {}, nextT = 0, step = 0, on = true, vol = 0.8, ducked = false;
   const banks = {}; // inst -> Map(midi -> AudioBuffer)
   // Slow, dark and modal: D minor with Phrygian E-flat colour, long drones, sparse plucked voices.
   const BPM = 62, S16 = 60 / BPM / 4, LOOP = 256;
   const CH = {
     Dm: [38, 50, 57, 62, 65], Eb: [39, 51, 58, 63, 67], A: [33, 45, 57, 61, 64], Asus: [33, 45, 57, 62, 64],
     Gm: [31, 43, 58, 62, 67], Bb: [34, 46, 58, 62, 65],
+    C: [36, 48, 55, 60, 64],
   };
   const PROG = [['Dm', 'Dm', 'Eb', 'Dm', 'Gm', 'Eb', 'A', 'A'], ['Gm', 'Gm', 'Bb', 'Eb', 'Dm', 'Gm', 'Asus', 'A']];
   // [beat, beats, midi] per bar — long, falling phrases
@@ -1801,7 +1845,8 @@ const Music = (() => {
     g.gain.setValueAtTime(vel, end); g.gain.exponentialRampToValueAtTime(0.0001, end + release);
     src.connect(g).connect(layers[layer]); src.start(t); src.stop(end + release + 0.05);
   }
-  function schedule(s, t) {
+  // DAY: the original calm theme — drones, harp, a lone lute, the recorder's slow falling melody
+  function dayScore(s, t) {
     const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
     const ch = CH[PROG[sec][bi]], barLen = 16 * S16, up = ch.slice(2);
     if (p === 0) {
@@ -1825,29 +1870,82 @@ const Music = (() => {
       play('recorder', 'calm', n, t, d, 0.26, 0.9, 0.18);
       play('horn', 'brass', n - 12, t, d, 0.38, 1.0, 0.25);
     }
-    // fight layers: low horn swells, a heavy pulse, and a heartbeat on the war drums
-    if (p === 0) play('horn', 'brass', ch[1], t, barLen, 0.22, 1.4, 1.0);
-    if (p % 4 === 0) play('pizz', 'low', ch[0] + (p === 8 ? 7 : 0), t, S16 * 3, 0.42, 0.4);
-    if (p === 0) play('drum', 'perc', 36, t, 2, 0.8, 1.0);
-    if (p === 3) play('drum', 'perc', 36, t, 2, 0.5, 1.0);
-    if (p === 10 && bi % 2 === 1) play('drum', 'perc', 33, t, 2, 0.45, 1.0);
-    if (bi === 7) { if (p % 2 === 0) play('timp', 'perc', 33, t, 1.2, 0.15 + (p / 16) * 0.45, 0.6); }
+  }
+
+  // NIGHT: darker and emptier. A hushed string drone, the choir breathing in and out every other bar, harp notes falling
+  // slowly like drops, a far-off bell, and the recorder only now and then, an octave up and twice as slow.
+  const NPROG = [['Dm', 'Bb', 'Gm', 'Dm', 'Eb', 'Bb', 'Asus', 'A'], ['Gm', 'Dm', 'Eb', 'Bb', 'Gm', 'Eb', 'Asus', 'Dm']];
+  const NMEL = [[[0, 8, 74]], [], [[0, 4, 70], [4, 4, 69]], [], [[0, 8, 67]], [], [[0, 4, 69], [4, 4, 73]], []];
+  function nightScore(s, t) {
+    const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
+    const ch = CH[NPROG[sec][bi]], barLen = 16 * S16;
+    if (p === 0) {
+      play('strings', 'strings', ch[0], t, barLen + 0.6, 0.26, 2.2, 1.6);
+      play('strings', 'strings', ch[2], t + 0.4, barLen, 0.08, 2.2, 2.0);
+      if (bi % 2 === 0) for (const n of ch.slice(2, 4)) play('choir', 'choir', n, t + 0.5, barLen * 2 - 0.6, 0.13, 2.6, 2.4);
+      if (bi === 4) play('bell', 'harp', sec ? 57 : 62, t + 0.3, 5, 0.1, 4);
+    }
+    // falling harp drops: a slow descending broken chord on alternate bars
+    if (bi % 2 === 1 && p % 4 === 0) play('harp', 'harp', [ch[4] + 12, ch[3] + 12, ch[2] + 12, ch[1] + 12][p / 4], t, 4, 0.22, 3);
+    // the recorder, rarely, half as fast and an octave up
+    if (sec === 1 || bi % 4 < 2) for (const [st8, len, n] of NMEL[bi]) if (st8 * 2 === p) play('recorder', 'calm', n, t, len * 2 * S16 * 0.97, 0.16, 1.4, 0.3);
+    // a soft, low pluck like a distant footstep
+    if (p === 10 && bi % 4 === 3) play('pizz', 'low', ch[0], t, S16 * 4, 0.2, 0.8);
+  }
+
+  // COMBAT: Gothic-style battle music. A Phrygian D minor that drives: staccato low strings on every eighth note, war
+  // drums on the beat with off-beat answers, horn calls over held brass chords, and a timpani roll into each new phrase.
+  const FPROG = [['Dm', 'Dm', 'C', 'Bb', 'Dm', 'Eb', 'C', 'A'], ['Gm', 'Gm', 'Eb', 'Bb', 'Dm', 'Eb', 'Asus', 'A']];
+  const FCALL = [[0, 62], [2, 65], [3, 64], [4, 62], [8, 69], [12, 67], [14, 65]]; // a horn call, every other bar
+  function fightScore(s, t) {
+    const bar = Math.floor(s / 16), sec = bar < 8 ? 0 : 1, bi = bar % 8, p = s % 16;
+    const ch = CH[FPROG[sec][bi]], barLen = 16 * S16;
+    if (p === 0) {
+      play('strings', 'strings', ch[0], t, barLen + 0.2, 0.3, 0.8, 0.3);
+      for (const n of ch.slice(2)) play('strings', 'strings', n + 12, t, barLen, 0.1, 1.0, 0.6);   // high, tense strings
+      play('horn', 'brass', ch[1], t, barLen, 0.26, 1.0, 0.5);
+      if (bi === 0) for (const n of ch.slice(2, 4)) play('choir', 'choir', n, t, barLen * 2, 0.16, 1.5, 0.8);
+    }
+    // the drive: staccato eighths on the root, jumping the octave on the off-beats
+    if (p % 2 === 0) play('pizz', 'low', ch[0] + (p % 4 === 2 ? 12 : 0), t, S16 * 1.5, p % 4 === 0 ? 0.5 : 0.34, 0.25);
+    // war drums: the beat, with answers on the off-beats
+    if (p % 4 === 0) play('drum', 'perc', p === 0 || p === 8 ? 36 : 33, t, 1.5, p === 0 ? 0.85 : 0.55, 0.8);
+    if (p === 6 || p === 14) play('drum', 'perc', 40, t, 1, 0.35, 0.6);
+    // horn call every other bar; trumpet-bright horns an octave down underneath
+    if (bi % 2 === 0) for (const [at, n] of FCALL) if (at === p) { play('horn', 'brass', n, t, S16 * 2.6, 0.36, 0.5, 0.05); play('horn', 'brass', n - 12, t, S16 * 2.6, 0.2, 0.5, 0.05); }
+    // timpani roll building into the next phrase
+    if (bi === 7) { if (p % 2 === 0) play('timp', 'perc', 33, t, 1.2, 0.2 + (p / 16) * 0.5, 0.6); }
     else if (p === 0 && bi % 2 === 0) play('timp', 'perc', ch[0], t, 3, 0.55, 1.2);
+    if (p === 12 && bi % 4 === 3) play('bell', 'harp', 74, t, 2, 0.12, 1.5);
+  }
+  // themes change on a bar line, and their layers cross-fade
+  const MIX = {
+    day: { strings: 0.9, choir: 0.7, harp: 0.8, lute: 0.7, low: 0, brass: 0.25, calm: 0.85, perc: 0 },
+    night: { strings: 0.75, choir: 0.85, harp: 0.75, lute: 0, low: 0.45, brass: 0, calm: 0.6, perc: 0 },
+    fight: { strings: 0.95, choir: 0.6, harp: 0.35, lute: 0, low: 0.9, brass: 0.95, calm: 0.3, perc: 0.95 },
+  };
+  let theme = null, pending = 'day';
+  function schedule(s, t) {
+    if (s % 16 === 0 && pending !== theme) {
+      theme = pending;
+      for (const k in MIX[theme]) layers[k].gain.setTargetAtTime(MIX[theme][k], t, 1.2);
+    }
+    if (theme === 'fight') fightScore(s, t); else if (theme === 'night') nightScore(s, t); else dayScore(s, t);
   }
   function tick() {
     if (!ctx || ctx.state !== 'running') return;
     if (nextT < ctx.currentTime - 1) nextT = ctx.currentTime + 0.05;
     while (nextT < ctx.currentTime + 0.25) { schedule(step, nextT); nextT += S16; step = (step + 1) % LOOP; }
   }
-  function setIntensity(x) {
-    if (!ctx || Math.abs(x - intensity) < 0.01) return;
-    intensity = x;
-    const lv = { strings: 0.9, choir: 0.75 - 0.2 * x, harp: 0.8 - 0.35 * x, lute: 0.7 - 0.3 * x, low: 0.8 * x, brass: 0.9 * x, calm: 0.85 - 0.35 * x, perc: 0.9 * x };
-    for (const k in lv) layers[k].gain.setTargetAtTime(lv[k], ctx.currentTime, 1.2);
+  // 'day' | 'night' | 'fight'. A fight starts on the next bar line, at once; the others wait for the next phrase
+  function setTheme(name) {
+    if (name === pending) return;
+    pending = name;
+    if (name === 'fight' && ctx) step = Math.ceil(step / 16) * 16 % LOOP; // jump straight to the next bar
   }
   const apply = () => ctx && out.gain.setTargetAtTime(on ? vol * (ducked ? 0.4 : 1) : 0, ctx.currentTime, 0.15);
   return {
-    init, setIntensity,
+    init, setTheme, get theme() { return theme; },
     toggle() { on = !on; apply(); return on; },
     setVolume(v) { vol = v; apply(); },
     duck(d) { ducked = d; apply(); },
@@ -1866,7 +1964,7 @@ function nz({ dur = 0.2, type = 'bandpass', f0 = 1000, f1 = f0, q = 1, gain = 0.
   if (pan && AC.createStereoPanner) { const p = AC.createStereoPanner(); p.pan.value = pan; out = out.connect(p); }
   out.connect(master); s.start(t, Math.random()); s.stop(t + dur + 0.05);
 }
-function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 0.004, delay = 0, lp = 0, vib = 0, vibF = 25 }) {
+function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 0.004, delay = 0, lp = 0, vib = 0, vibF = 25, pan = 0 }) {
   if (!AC) return;
   const t = AC.currentTime + delay;
   const o = AC.createOscillator(); o.type = type;
@@ -1876,7 +1974,9 @@ function tn({ dur = 0.2, type = 'sine', f0 = 440, f1 = f0, gain = 0.3, attack = 
   if (lp) { const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp; node.connect(f); node = f; }
   const g = AC.createGain(); g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  node.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05);
+  let out = node.connect(g);
+  if (pan && AC.createStereoPanner) { const p = AC.createStereoPanner(); p.pan.value = pan; out = out.connect(p); }
+  out.connect(master); o.start(t); o.stop(t + dur + 0.05);
 }
 // A synthesized male voice (no recordings). The pieces that make it read as human rather than a buzzer:
 //  · a glottal-pulse source whose harmonics fall off like real vocal folds (pressed/effortful = brighter),
@@ -2148,17 +2248,86 @@ const COMBO = ['chop', 'rl', 'lr', 'wave', 'spin', 'heavy'];
 const easeIn = t => t * t, easeOut = t => 1 - (1 - t) * (1 - t);
 
 const hero = buildHero();
+// ---- surface detail for the hero's leather and hair. The model has no texture coordinates, so the detail is projected
+// from three sides (triplanar, in the part's own space) and blended by the surface's facing. It tints the colour (a
+// grey texture: 0.5 = no change) and bumps the normal from the texture's slope, so grain and strands catch the light.
+function detailTex(draw) {
+  const s = 256, c = document.createElement('canvas'); c.width = c.height = s; const x = c.getContext('2d');
+  x.fillStyle = 'rgb(128,128,128)'; x.fillRect(0, 0, s, s); draw(x, s);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; return t;
+}
+const wrapDraw = (x, s, fn) => { for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) fn(ox, oy); }; // tileable
+// Grainy leather, sized for the screen: a pebbled grain of irregular cells (5-12 mm on the model, finer than that
+// only flickers), creases where it flexes, and lighter, worn scuffs.
+const leatherTex = detailTex((x, s) => {
+  for (let i = 0; i < 420; i++) {
+    const px = rand(0, s), py = rand(0, s), r = rand(4, 9), v = rand(120, 146) | 0, q = rand(0, 3);
+    wrapDraw(x, s, (ox, oy) => {
+      x.fillStyle = 'rgba(78,78,78,.22)'; x.beginPath(); x.ellipse(px + ox, py + oy, r + 1.5, r * 0.8 + 1.5, q, 0, 7); x.fill();
+      x.fillStyle = `rgb(${v},${v},${v})`; x.beginPath(); x.ellipse(px + ox, py + oy, r, r * 0.8, q, 0, 7); x.fill();
+    });
+  }
+  for (let i = 0; i < 22; i++) { // creases
+    const px = rand(0, s), py = rand(0, s), a = rand(0, 3.14), l = rand(40, 110);
+    wrapDraw(x, s, (ox, oy) => { x.strokeStyle = `rgba(55,55,55,${rand(0.35, 0.6)})`; x.lineWidth = rand(1.8, 3.2); x.beginPath(); x.moveTo(px + ox, py + oy);
+      x.quadraticCurveTo(px + ox + Math.cos(a) * l * 0.5 + rand(-14, 14), py + oy + Math.sin(a) * l * 0.5 + rand(-14, 14), px + ox + Math.cos(a) * l, py + oy + Math.sin(a) * l); x.stroke(); });
+  }
+  for (let i = 0; i < 14; i++) { // worn scuffs
+    const px = rand(0, s), py = rand(0, s), r = rand(16, 40);
+    wrapDraw(x, s, (ox, oy) => { const gr = x.createRadialGradient(px + ox, py + oy, 0, px + ox, py + oy, r); gr.addColorStop(0, 'rgba(176,176,176,.4)'); gr.addColorStop(1, 'rgba(176,176,176,0)'); x.fillStyle = gr; x.fillRect(px + ox - r, py + oy - r, 2 * r, 2 * r); });
+  }
+});
+// Hair: tufts (1-3 cm on the model) of thick strands running down the texture, with dark gaps between the tufts.
+const hairTex = detailTex((x, s) => {
+  x.fillStyle = 'rgb(78,78,78)'; x.fillRect(0, 0, s, s);
+  for (let k = 0; k < 34; k++) {
+    const cx = rand(0, s), w = rand(10, 22), y0 = rand(0, s), len = rand(90, 200), sway = rand(-22, 22);
+    for (let i = 0; i < 16; i++) {
+      const px = cx + rand(-w, w) * (1 - i / 32), v = rand(130, 190) | 0, lw = rand(1.6, 3.2);
+      wrapDraw(x, s, (ox, oy) => { x.strokeStyle = `rgba(${v},${v},${v},${rand(0.55, 0.9)})`; x.lineWidth = lw; x.lineCap = 'round'; x.beginPath(); x.moveTo(px + ox, y0 + oy);
+        x.bezierCurveTo(px + ox + sway * 0.3, y0 + oy + len * 0.35, px + ox + sway, y0 + oy + len * 0.7, px + ox + sway * 0.7, y0 + oy + len); x.stroke(); });
+    }
+  }
+});
+function triplanarDetail(mat, tex, scale, bump, strength = 1, roughVar = 0) {
+  // the bump comes from the texture's own slope (central differences in each projection), not from screen-space
+  // derivatives: smooth at any resolution, no 2×2-pixel blocks
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.tDetail = { value: tex };
+    sh.vertexShader = 'varying vec3 vObjP; varying vec3 vObjN; varying vec3 vNm0; varying vec3 vNm1; varying vec3 vNm2;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\n  vObjP = position; vObjN = normal; vNm0 = normalMatrix[0]; vNm1 = normalMatrix[1]; vNm2 = normalMatrix[2];');
+    const S = (uv, o) => `texture2D(tDetail, ${uv} + ${o}).r`;
+    sh.fragmentShader = 'uniform sampler2D tDetail; varying vec3 vObjP; varying vec3 vObjN; varying vec3 vNm0; varying vec3 vNm1; varying vec3 vNm2;\n' + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec3 tw = pow(abs(normalize(vObjN)), vec3(4.0)); tw /= (tw.x + tw.y + tw.z);
+        vec3 tp = vObjP * ${scale.toFixed(2)};
+        const vec2 e1 = vec2(1.5 / 256.0, 0.0), e2 = vec2(0.0, 1.5 / 256.0);
+        float dX = ${S('tp.zy', 'vec2(0.0)')}, dY = ${S('tp.xz', 'vec2(0.0)')}, dZ = ${S('tp.xy', 'vec2(0.0)')};
+        float det = dX * tw.x + dY * tw.y + dZ * tw.z;
+        // object-space slope of the detail, per projection (plane zy → z,y; xz → x,z; xy → x,y)
+        vec3 dn = tw.x * vec3(0.0, ${S('tp.zy', 'e2')} - ${S('tp.zy', '-e2')}, ${S('tp.zy', 'e1')} - ${S('tp.zy', '-e1')})
+                + tw.y * vec3(${S('tp.xz', 'e1')} - ${S('tp.xz', '-e1')}, 0.0, ${S('tp.xz', 'e2')} - ${S('tp.xz', '-e2')})
+                + tw.z * vec3(${S('tp.xy', 'e1')} - ${S('tp.xy', '-e1')}, ${S('tp.xy', 'e2')} - ${S('tp.xy', '-e2')}, 0.0);
+        diffuseColor.rgb *= 1.0 + (det - 0.5) * ${(2 * strength).toFixed(2)};`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = clamp(roughnessFactor + (0.5 - det) * ${roughVar.toFixed(2)}, 0.05, 1.0);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(normal - mat3(vNm0, vNm1, vNm2) * dn * ${bump.toFixed(3)});`);
+  };
+  mat.customProgramCacheKey = () => 'detail' + scale + bump + strength;
+  return mat;
+}
 // Blender-built hero (tools/build_hero.py -> models/hero.glb); swapped in place of the primitive hero at load.
 function buildHeroGLB(tpl) {
   const vc = { vertexColors: true };
   const M = {
     // worn, matte finishes: skin with a soft sheen, dry leather, dull brushed steel; only the blade keeps an edge of shine
     skin: phys(0x9a6e55, 0.8, 0, { ...vc, sheen: 0.1, sheenColor: 0xd8a890, sheenRoughness: 0.7, specularIntensity: 0.5, envMapIntensity: 0.5 }),
-    leather: std(0x50301d, 0.82, 0, vc),
+    leather: triplanarDetail(std(0x50301d, 0.82, 0, vc), leatherTex, 3.2, 1.1, 0.5, 0.3),
     cloth: std(0x3d3c31, 0.96, 0, { ...vc, side: THREE.DoubleSide }),
     sash: std(0x7a2418, 0.92, 0, { ...vc, side: THREE.DoubleSide }),
-    boot: std(0x2b1d12, 0.78, 0, vc),
-    hair: std(0x2a1b12, 1, 0, vc),
+    boot: triplanarDetail(std(0x2b1d12, 0.78, 0, vc), leatherTex, 2.8, 1.1, 0.45, 0.3),
+    hair: triplanarDetail(std(0x2a1b12, 0.9, 0, vc), hairTex, 3.0, 1.5, 0.75, 0.3),
     // metals: worn and dull underneath, with a thin clear layer that throws a small, crisp, cold highlight
     // No clearcoat: worn steel has no lacquer over it, and a clear layer is what made the armour read as plastic.
     // The roughness texture breaks the reflections up instead (scratches and burnish glint, smudges stay dull).
@@ -3042,7 +3211,7 @@ function pauseGame() {
   paused = true;
   for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; touch.reset?.();
   $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
-  $('optBright').value = settings.bright; $('optWeather').value = settings.weather;
+  $('optBright').value = settings.bright; $('optWeather').value = settings.weather; $('optShafts').checked = settings.shafts !== false;
   $('pause').classList.remove('hidden');
   if (document.pointerLockElement) document.exitPointerLock();
   Music.duck(true);
@@ -3069,6 +3238,7 @@ $('optSens').oninput = e => { settings.sens = +e.target.value; saveSettings(); }
 $('optLock').onchange = e => { lockOn = e.target.checked; saveSettings(); };
 $('optBright').oninput = e => { settings.bright = +e.target.value; applyBright(); saveSettings(); };
 $('optWeather').onchange = e => { settings.weather = e.target.value; saveSettings(); };
+$('optShafts').onchange = e => { settings.shafts = e.target.checked; saveSettings(); };
 // losing pointer lock (the browser eats the first Esc press) or the window losing focus pauses the game
 document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement && performance.now() - resumeGuard > 300) pauseGame();
@@ -3437,7 +3607,68 @@ function updateBanners() {
 const depthMats = [THREE.FrontSide, THREE.BackSide, THREE.DoubleSide].map(side =>
   new THREE.MeshBasicMaterial({ colorWrite: false, side, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2 })); // nudged back so the real pass always wins ties
 renderer.shadowMap.autoUpdate = false; // the frame is rendered in two passes; the shadow map only needs one update
-const prepassed = [];
+const prepassed = []; let shadowFrame = 0;
+// ---- light shafts (volumetric light in screen space, after GPU Gems 3, ch. 13)
+// At a quarter of the resolution, draw the sun as a bright disc with everything solid in front of it in black; then
+// blur that radially away from the sun's place on screen and add it over the frame. Whatever stands between the camera
+// and the sun (the hero's head, a beast, the palisade, a roof edge) throws visible shafts of light. Skipped entirely when
+// the sun is behind the camera, set, or buried in cloud.
+const Shafts = (() => {
+  const SCALE = 0.25, N = TOUCH ? 32 : 48;
+  const rt = new THREE.WebGLRenderTarget(4, 4, { depthBuffer: true });
+  const black = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
+  const sunTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
+    const gr = x.createRadialGradient(64, 64, 0, 64, 64, 64); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.12, 'rgba(255,255,255,.9)'); gr.addColorStop(0.35, 'rgba(255,255,255,.25)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 128, 128); return new THREE.CanvasTexture(c); })();
+  const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: sunTex, depthWrite: false, depthTest: false, fog: false }));
+  sunSprite.scale.setScalar(120); const sunScene = new THREE.Scene(); sunScene.add(sunSprite);
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { tOcc: { value: rt.texture }, sunPos: { value: new THREE.Vector2() }, strength: { value: 0 }, tint: { value: new THREE.Color() } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D tOcc; uniform vec2 sunPos; uniform float strength; uniform vec3 tint; varying vec2 vUv;
+      void main(){
+        vec2 d = (vUv - sunPos) * (0.92 / ${N}.0), uv = vUv; float w = 1.0, sum = 0.0;
+        for (int i = 0; i < ${N}; i++) { uv -= d; sum += texture2D(tOcc, uv).r * w; w *= 0.972; }
+        gl_FragColor = vec4(tint * sum * (strength / ${N}.0), 1.0);
+      }`,
+    blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
+  });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat); quad.frustumCulled = false;
+  const qScene = new THREE.Scene(); qScene.add(quad); const qCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const v = new V3(), fwd = new V3(), clear = new THREE.Color(); let odd = false, fresh = false;
+  function size() { rt.setSize(Math.max(4, innerWidth * SCALE | 0), Math.max(4, innerHeight * SCALE | 0)); }
+  size(); addEventListener('resize', size);
+  function render() {
+    const D = Daylight.st, oc = sky.material.uniforms.overcast.value;
+    const sunUp = smoothstep(0.0, 0.12, SUN_DIR.y) * (1 - oc * 0.9);
+    camera.getWorldDirection(fwd);
+    const facing = fwd.dot(SUN_DIR);
+    if (sunUp < 0.02 || facing < 0.2 || settings.shafts === false) { fresh = false; return; }
+    v.copy(SUN_DIR).multiplyScalar(250).add(camera.position); sunSprite.position.copy(v);
+    v.project(camera);
+    const off = Math.max(Math.abs(v.x), Math.abs(v.y)), edge = 1 - smoothstep(1.0, 1.6, off);
+    const strength = 1.25 * sunUp * edge * smoothstep(0.2, 0.5, facing);
+    if (strength < 0.01) { fresh = false; return; }
+    mat.uniforms.sunPos.value.set(v.x * 0.5 + 0.5, v.y * 0.5 + 0.5);
+    mat.uniforms.strength.value = strength;
+    mat.uniforms.tint.value.setRGB(1.0, 0.86, 0.66).lerp(clear.setRGB(1.0, 0.55, 0.28), D.dusk);
+    const layers = camera.layers.mask, ac = renderer.autoClear;
+    renderer.getClearColor(clear); const ca = renderer.getClearAlpha();
+    // the occlusion picture is redrawn every other frame (it's blurred anyway): half the cost
+    if ((odd = !odd) || !fresh) {
+      renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 1);
+      renderer.autoClear = true; renderer.render(sunScene, camera);                  // the bright sun
+      renderer.autoClear = false; camera.layers.set(0); scene.overrideMaterial = black;
+      renderer.render(scene, camera);                                               // everything solid in front of it, black
+      scene.overrideMaterial = null; camera.layers.mask = layers;
+      renderer.setRenderTarget(null); renderer.setClearColor(clear, ca); fresh = true;
+    }
+    renderer.autoClear = false; renderer.render(qScene, qCam);                      // streak it out and add it over the frame
+    renderer.autoClear = ac;
+    mat.uniforms.tint.value.setRGB(1.0, 0.86, 0.66);
+  }
+  return { render };
+})();
 function drawFrame() {
   prepassed.length = 0;
   scene.traverse(o => {
@@ -3450,15 +3681,18 @@ function drawFrame() {
   renderer.render(scene, camera);
   for (let i = 0; i < prepassed.length; i += 2) prepassed[i].material = prepassed[i + 1];
   camera.layers.enable(1);
-  renderer.shadowMap.needsUpdate = true;
+  // Shadows are real, from the sun (or moon) where it stands, which moves every 2 s with the clock (Daylight). The shadow
+  // map is re-rendered every other frame: half the cost, and the characters' shadows still follow them smoothly.
+  if ((shadowFrame = (shadowFrame + 1) % 2) === 0) renderer.shadowMap.needsUpdate = true;
   renderer.autoClear = false; renderer.render(scene, camera); renderer.autoClear = true;
+  Shafts.render();
 }
 // Dynamic resolution: almost all the frame time is pixel shading, so when the frame rate sags (a phone, a weak laptop)
 // the render resolution steps down, and it steps back up when there is headroom. Judged over 2-second windows.
 let daylightT = 0;
 let prevNow = performance.now(), frWin = 0, frN = 0, frCool = 3;
 function adaptResolution(fdt) {
-  if (!(fdt > 0) || fdt > 0.5) return; // tab switches, hitches
+  if (!(fdt > 0) || fdt > 0.5 || window.__noAdapt) return; // tab switches, hitches (debug: __noAdapt holds it)
   frWin += fdt; frN++; frCool -= fdt;
   if (frWin < 2) return;
   const fps = frN / frWin; frWin = 0; frN = 0;
@@ -3502,6 +3736,7 @@ function tick(rdt) {
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
   if ((daylightT -= rdt) <= 0) { daylightT = 2; Daylight.update(); } // the clock moves slowly: a few updates a minute is plenty
+  Ambience.update(rdt);
   updateTorches(dt, time);
   grassWind.value += dt * (1 + Weather.rain * 0.6); // a storm blows harder
   Weather.update(dt, time);
@@ -3510,7 +3745,7 @@ function tick(rdt) {
   if (clockEl.crackle <= 0 && AC) { clockEl.crackle = rand(0.05, 0.35); SFX.crackle?.(); }
   updateBanners();
   const fighting = game.state === 'play' && beasts.some(e => !e.dead && e.state !== 'wait');
-  Music.setIntensity(fighting ? 1 : game.state === 'play' || game.state === 'between' ? 0.45 : 0.2);
+  Music.setTheme(fighting ? 'fight' : Daylight.st.night > 0.5 ? 'night' : 'day');
   fxAdd.update(dt); fxNorm.update(dt); trail.update(dt);
   updateCamera(rdt);
   sky.position.copy(camera.position);
