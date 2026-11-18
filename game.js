@@ -5,6 +5,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BUILD } from './version.js';
 
+// The world is the same on every visit: while it's being built (the ground, the clutter, the town, its houses' types,
+// roofs, plaster and sizes, the mountains), Math.random is a seeded generator. Combat randomness is restored once the
+// town stands (see preload). TOWN_SEED picks the town; ?seed=N in the URL tries another one.
+const TOWN_SEED = +(new URLSearchParams(location.search).get('seed') || 7);
+const realRandom = Math.random;
+Math.random = (() => { let a = TOWN_SEED >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })(); // mulberry32
 const V3 = THREE.Vector3;
 // Specular occlusion (approximate). The sky reflection (the environment map) reaches every surface, even where sun and
 // torches don't, and that is what makes dull things look lacquered and lit up: shadowed stone, the hero's leather,
@@ -191,10 +197,12 @@ const barrier = (() => {
         vec2 rg = texture2D(noiseTex, (i.xy + vec2(37.0, 17.0) * i.z + f.xy + 0.5) / 256.0).yx;
         return mix(rg.x, rg.y, f.z); }
       float fbm(vec3 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return v; }
+      float fbm2(vec3 p){ return (noise(p) * 0.5 + noise(p * 2.03 + vec3(1.7, 9.2, 3.1)) * 0.25) / 0.75; } // for the slow, broad warp
       // soft cell walls: distance to the nearest two jittered seeds (smooth, like a membrane of cells)
-      float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
-        for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
-          vec3 g = vec3(x, y, z), o = hash3(i + g); o = 0.5 + 0.4 * sin(t * 0.4 + 6.2831 * o);
+      // (searching the 2×2×2 cells on the near side of the point, not all 27: the far ones almost never hold a nearest seed)
+      float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p), s = step(0.5, f) - 1.0; float d1 = 8.0, d2 = 8.0;
+        for (int x = 0; x <= 1; x++) for (int y = 0; y <= 1; y++) for (int z = 0; z <= 1; z++) {
+          vec3 g = vec3(x, y, z) + s, o = hash3(i + g); o = 0.5 + 0.4 * sin(t * 0.4 + 6.2831 * o);
           float d = length(g + o - f); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
         return d2 - d1; }
       void main(){
@@ -209,10 +217,10 @@ const barrier = (() => {
         float vis = veil * 0.45 + base * 0.55;
         // most of the dome is invisible most of the time: skip all the expensive vein work there unless a strike is near
         float struck = 0.0;
-        for (int i = 0; i < ${HITS}; i++) { float age = hits[i].w; if (age < 3.0 && dot(n, hits[i].xyz) > cos(min(3.1, age * 0.3 + 0.6))) struck = 1.0; }
+        for (int i = 0; i < ${HITS}; i++) { float age = hits[i].w; if (age < 2.2 && dot(n, hits[i].xyz) > cos(age * 0.3 + 0.3)) struck = 1.0; } // the ring and glow are spent beyond this
         if (vis < 0.003 && struck < 0.5) discard;
         // domain warp that slowly evolves → everything streams and curls
-        vec3 w = vec3(fbm(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
+        vec3 w = vec3(fbm2(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm2(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm2(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
         vec3 q = p + (w - 0.5) * 3.2;
         // branching veins: ridges of two noise octaves, thin and bright where they cross
         float v1 = 1.0 - abs(noise(q * 1.6) * 2.0 - 1.0);
@@ -225,7 +233,7 @@ const barrier = (() => {
         float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
         float I = ((veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe) * (0.55 + 0.9 * agit);
         for (int i = 0; i < ${HITS}; i++) {
-          float age = hits[i].w; if (age > 3.0) continue;
+          float age = hits[i].w; if (age > 2.2) continue;
           float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0)) + (w.y - 0.5) * 0.04; // wobbly, not a perfect circle
           float ring = exp(-pow((d - age * 0.3) * 22.0, 2.0)) * exp(-age * 1.5);
           float lit = exp(-d * 9.0) * exp(-age * 1.2);                                 // veins near the strike light up
@@ -446,7 +454,7 @@ const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 0, ston
 const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 150, 56), sandMaps, (x, z) => {
   const m = macro(x, z, 1), r = Math.hypot(x, z), P0 = arenaPatches(x, z);
   const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.45;  // churned, darker mud
-  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2;                                       // trodden filth along the wall
+  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2 + smoothstep(16.6, 18.3, r) * 0.22;      // trodden filth and mud along the wall (the same dirt that creeps up it)
   const v = (0.76 + m * 0.26) * (1 - mud - grime) * (1 - P0.track * 0.22);               // tracks: packed down, darker
   let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
   const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
@@ -607,6 +615,34 @@ const woodTex = canvasTex(256, (g, s) => {
   weather(g, s, { streaks: 14, damp: 0.35, dampA: 0.5, blotches: 14, moss: 0.3, grit: 1500 });
 });
 const logMat = surfMat(woodTex, 0.95, 2.5);
+// Where a wall meets the ground (the palisade, stone, plank walls): environmental blending instead of a hard seam. In
+// the material's own shader, the arena's earth creeps up the bottom of the wall with a ragged, noisy edge (mud
+// splashed and trodden against it), the surface turns matte there, and the normals bend toward the ground's normal, so
+// the base of the wall takes the light like the floor does and the lighting break between them disappears. Real-time,
+// so it works with the moving sun and costs a couple of texture reads.
+function groundBlend(mat, base = 0.12, height = 0.85) {
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uGbNoise = { value: noiseTex };
+    sh.vertexShader = 'varying vec3 vGbPos;\n' + sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+      #ifdef USE_INSTANCING
+        vGbPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+      #else
+        vGbPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+      #endif`);
+    sh.fragmentShader = 'uniform sampler2D uGbNoise; varying vec3 vGbPos;\n' + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float gbJ = texture2D(uGbNoise, vGbPos.xz * 0.9 + vGbPos.y * 0.15).g * 0.6 + texture2D(uGbNoise, vGbPos.xz * 3.1).g * 0.4;
+        float gb = 1.0 - smoothstep(0.0, 1.0, (vGbPos.y - ${base.toFixed(2)}) / ${height.toFixed(2)} + (gbJ - 0.5) * 0.7);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.075, 0.06, 0.045) * (0.75 + 0.5 * gbJ), gb * 0.85); // dark, wet mud`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 1.0, gb);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), gb * 0.22));`);
+  };
+  mat.customProgramCacheKey = () => 'gb' + base + height;
+  return mat;
+}
+groundBlend(logMat);
 const darkWood = surfMat(woodTex, 0.93, 2.5, 0, { color: 0x8a7a6a });
 
 // rough, pitted rust for every bit of old iron
@@ -713,6 +749,7 @@ const stoneMaps = (() => {
 // barely visible after the reflection pass; dimmer reflections stand in for the lower specular intensity)
 const stoneM = std(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), envMapIntensity: 0.32 });
 stoneM.userData.world = 3.5;
+groundBlend(stoneM, 0.1, 0.7);
 
 // worn steel: brushed grain, fine bright scratches, dull smudges and pits — a roughness texture so reflections
 // on the hero's armour break up across the surface instead of sliding over it like a mirror
@@ -950,7 +987,7 @@ function buildTown() {
     }
     weather(g, s, { streaks: 20, damp: 0.4, dampA: 0.55, blotches: 18, moss: 0.4, grit: 2000 });
   });
-  const planksM = surfMat(planksTex, 0.95, 2.5, 0, { side: THREE.DoubleSide }); planksM.userData.world = 3;
+  const planksM = groundBlend(surfMat(planksTex, 0.95, 2.5, 0, { side: THREE.DoubleSide }), 0.3, 0.7); planksM.userData.world = 3;
 
   // ---- roofs: four coverings, each a tile texture laid out 8 across × 8 courses so the geometry can match it
   const tileTex = (draw, under) => canvasTex(512, (g, s) => {
@@ -3190,7 +3227,7 @@ function onPlayerDeath() {
   game.state = 'dead'; game.deadT = 0;
   SFX.thud();
   setTimeout(() => {
-    showOverlay(`<h1>YOU HAVE FALLEN</h1><div class="tag">REACHED ROUND ${toRoman(game.round)}</div>
+    showOverlay(`<div class="logo small"><img class="emblem" src="icon-512.png" alt=""></div><h1>YOU HAVE FALLEN</h1><div class="tag">REACHED ROUND ${toRoman(game.round)}</div>
       <p>Watch the eyes: they flare before every strike. Parry the pecks, step back from the charge, then punish the recovery.</p>
       <button id="startBtn">FIGHT AGAIN</button>`);
   }, 2200);
@@ -3662,7 +3699,7 @@ const Shafts = (() => {
   size(); addEventListener('resize', size);
   function render() {
     const D = Daylight.st, oc = sky.material.uniforms.overcast.value;
-    const sunUp = smoothstep(0.0, 0.12, SUN_DIR.y) * (1 - oc * 0.9);
+    const sunUp = smoothstep(0.0, 0.12, SUN_DIR.y) * (1 - smoothstep(0.25, 0.6, oc)); // none once the sky clouds over (it was still paying for a faint 10 % in rain)
     camera.getWorldDirection(fwd);
     const facing = fwd.dot(SUN_DIR);
     if (sunUp < 0.02 || facing < 0.2 || settings.shafts === false) { fresh = false; return; }
@@ -3811,7 +3848,7 @@ async function preload() {
     await fn();
   };
   let warm;
-  await step('RAISING THE TOWN…', 15, () => buildTown());
+  await step('RAISING THE TOWN…', 15, () => { buildTown(); Math.random = realRandom; }); // the world is built: back to real randomness
   await step('CARVING THE THORNBEAK…', 25, async () => {
     try {
       const h = (await new GLTFLoader().loadAsync('models/hero.glb')).scene;

@@ -20,6 +20,12 @@ killing blow) to 35 %. The camera, HUD and damage numbers run on real time (`rdt
 the real pass shades each pixel exactly once. Transparent things, particles, lines, the sky and the barrier only go
 through the second pass, on layer 1.
 
+## The world is fixed
+While the world is built, `Math.random` is a seeded generator (mulberry32, `TOWN_SEED`). This covers the ground shape, the clutter, the town (each house's type, roof, plaster and size) and the mountains, so every visit shows the same town. Real randomness comes back for play once the town stands. `?seed=N` tries another layout. Within each ring a house type returns no sooner than 3 houses on.
+
+## Wall bases (`groundBlend`)
+Where the palisade, stone and plank walls meet the ground, the shader blends in the earth instead of leaving a seam. Ragged, noisy mud creeps up the bottom of each wall and goes matte, and the normals bend toward the ground's, so the base takes the light like the floor does. A matching trodden-mud band runs along the inside of the wall. It's real time, so it works with the moving sun.
+
 ## Terrain
 `groundH(x, z)` is the single height function. Its small bumps are value noise (`fbm2`), as is `macro()`, the large-scale colour variation, because sine sums showed up as regular waves and stripes. The terrain mesh, feet, blood decals, pebbles, puddles and the rain
 splashes all use it.
@@ -108,6 +114,7 @@ soaks in quickly and dries over about a minute. Together they drive:
 **Dry** and **Rain** in the pause menu force one or the other.
 
 ## Light shafts (`Shafts`)
+The occlusion pass draws only the characters and large meshes (layer 2), at 1/5 resolution. It switches off entirely once the sky is more than about half overcast.
 These are screen-space volumetric light. A quarter-resolution pass draws the sun as a bright disc with every opaque mesh in black in front of it, and is redrawn every other frame. A radial blur from the sun's screen position is then added over the frame. The pass is skipped when the sun is behind the camera, has set, or is hidden by cloud; the pause menu can also turn it off.
 
 ## Barrier
