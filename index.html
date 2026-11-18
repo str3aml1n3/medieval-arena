@@ -177,6 +177,20 @@
   /* build stamp: only on the loading, title and pause screens */
   #build { position:fixed; right:calc(env(safe-area-inset-right) + 12px); bottom:calc(env(safe-area-inset-bottom) + 8px); z-index:7; display:none; font-family:Georgia,serif; font-size:11px; letter-spacing:.08em; color:rgba(234,223,200,.5); text-shadow:0 1px 2px #000; pointer-events:none; }
   #loading:not(.hidden) ~ #build, #pause:not(.hidden) ~ #build, #overlay:not(.hidden) ~ #build { display:block; }
+  /* ---- the logo: shield emblem, worn-gold lettering, a sword-guard rule with a diamond (loading, title, pause) */
+  .logo { display:flex; flex-direction:column; align-items:center; margin-bottom:4px; }
+  .logo .emblem { width:84px; height:84px; margin-bottom:-6px; filter:drop-shadow(0 6px 10px rgba(0,0,0,.85)) drop-shadow(0 0 22px rgba(210,110,40,.25)); }
+  .logo h1 { margin:0; line-height:1.05; }
+  .logo .rule { position:relative; width:min(420px, 80vw); height:12px; margin:6px 0 2px; }
+  .logo .rule::before { content:''; position:absolute; left:0; right:0; top:5px; height:2px; background:linear-gradient(90deg, rgba(217,180,106,0), #d9b46a 30%, #f3dca4 50%, #d9b46a 70%, rgba(217,180,106,0)); box-shadow:0 1px 2px rgba(0,0,0,.8); }
+  .logo .rule i { position:absolute; left:50%; top:0; width:10px; height:10px; margin-left:-6px; transform:rotate(45deg); background:linear-gradient(135deg, #fff1cc, #c8954a 60%, #7d5226); border:1px solid #2a1a0c; box-shadow:0 0 8px rgba(240,200,120,.5); }
+  .logo.small .emblem { width:56px; height:56px; }
+  .logo.small h1 { font-size:34px !important; }
+  .logo.small .rule { width:min(300px, 70vw); }
+  .paused { font-size:22px; letter-spacing:.5em; margin:6px 0 2px; padding-left:.5em; color:#f0d7a4;
+    background-image:var(--tex-grain), linear-gradient(180deg, #fff3d4, #c8954a); -webkit-background-clip:text; background-clip:text; color:transparent; filter:drop-shadow(0 2px 2px rgba(0,0,0,.9)); }
+  @media (max-height:520px) { .logo .emblem { width:44px; height:44px; } .logo.small .emblem { display:none; } .logo.small h1 { font-size:26px !important; } .paused { font-size:16px; } }
+  body.portrait .logo .emblem { width:64px; height:64px; } body.portrait .logo.small h1 { font-size:26px !important; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
@@ -224,7 +238,7 @@
 </div>
 <div id="loading">
   <div class="panel">
-    <h1>MEDIEVAL ARENA</h1>
+    <div class="logo"><img class="emblem" src="icon-512.png" alt=""><h1>MEDIEVAL ARENA</h1><div class="rule"><i></i></div></div>
     <div class="tag" id="loadStep">RAISING THE STOCKADE…</div>
     <div class="lbar"><div class="lfill" id="loadFill"></div></div>
     <div class="spin"></div>
@@ -232,7 +246,8 @@
 </div>
 <div id="pause" class="hidden">
   <div class="panel">
-    <h1 style="font-size:44px">PAUSED</h1>
+    <div class="logo small"><img class="emblem" src="icon-512.png" alt=""><h1>MEDIEVAL ARENA</h1><div class="rule"><i></i></div></div>
+    <div class="paused">PAUSED</div>
     <div class="tag">THE CROWD HOLDS ITS BREATH</div>
     <div class="menu">
       <button id="resumeBtn">RESUME</button>
@@ -284,7 +299,7 @@
 </div>
 <div id="overlay" class="hidden">
   <div class="panel" id="panel">
-    <h1>MEDIEVAL ARENA</h1>
+    <div class="logo"><img class="emblem" src="icon-512.png" alt=""><h1>MEDIEVAL ARENA</h1><div class="rule"><i></i></div></div>
     <div class="tag">ONE BLADE · ONE BEAST · NO RETREAT</div>
     <p>A Thornbeak has been driven into the stockade. Draw your sword and learn its rhythm: strike, wait for the glint, strike again. Mash, and the chain breaks.</p>
     <div class="keys k-portrait">

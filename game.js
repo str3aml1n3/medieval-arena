@@ -5,6 +5,12 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BUILD } from './version.js';
 
+// The world is the same on every visit: while it's being built (the ground, the clutter, the town, its houses' types,
+// roofs, plaster and sizes, the mountains), Math.random is a seeded generator. Combat randomness is restored once the
+// town stands (see preload). TOWN_SEED picks the town; ?seed=N in the URL tries another one.
+const TOWN_SEED = +(new URLSearchParams(location.search).get('seed') || 7);
+const realRandom = Math.random;
+Math.random = (() => { let a = TOWN_SEED >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })(); // mulberry32
 const V3 = THREE.Vector3;
 // Specular occlusion (approximate). The sky reflection (the environment map) reaches every surface, even where sun and
 // torches don't, and that is what makes dull things look lacquered and lit up: shadowed stone, the hero's leather,
@@ -36,7 +42,7 @@ const STAND_TIERS = [[20.3, 5.0], [21.7, 6.2]];
 // adapts to the frame rate on every device (see `adaptResolution`)
 const TOUCH = matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0;
 const renderer = new THREE.WebGLRenderer({ antialias: !TOUCH, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
-const MAX_PR = Math.min(devicePixelRatio, TOUCH ? 1.5 : 2);
+const MAX_PR = Math.min(devicePixelRatio, 1.5); // 2× screens would shade 78 % more pixels for little visible gain
 let pixelRatio = MAX_PR;
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
@@ -121,7 +127,7 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.Shad
     float hash3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
     float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
       return texture2D(noiseTex, (i + u + 0.5) / 256.0).g; }
-    float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 6; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; }
+    float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 5; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; } // 5 octaves: the 6th was finer than a pixel at the sky's distance
     void main(){
       vec3 d = normalize(vD); float h = d.y;
       // overcast (weather): the sky greys over, the sun is buried, the clouds close up into a low, dark lid
@@ -191,10 +197,12 @@ const barrier = (() => {
         vec2 rg = texture2D(noiseTex, (i.xy + vec2(37.0, 17.0) * i.z + f.xy + 0.5) / 256.0).yx;
         return mix(rg.x, rg.y, f.z); }
       float fbm(vec3 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ v += a * noise(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return v; }
+      float fbm2(vec3 p){ return (noise(p) * 0.5 + noise(p * 2.03 + vec3(1.7, 9.2, 3.1)) * 0.25) / 0.75; } // for the slow, broad warp
       // soft cell walls: distance to the nearest two jittered seeds (smooth, like a membrane of cells)
-      float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0;
-        for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
-          vec3 g = vec3(x, y, z), o = hash3(i + g); o = 0.5 + 0.4 * sin(t * 0.4 + 6.2831 * o);
+      // (searching the 2×2×2 cells on the near side of the point, not all 27: the far ones almost never hold a nearest seed)
+      float cells(vec3 p, float t){ vec3 i = floor(p), f = fract(p), s = step(0.5, f) - 1.0; float d1 = 8.0, d2 = 8.0;
+        for (int x = 0; x <= 1; x++) for (int y = 0; y <= 1; y++) for (int z = 0; z <= 1; z++) {
+          vec3 g = vec3(x, y, z) + s, o = hash3(i + g); o = 0.5 + 0.4 * sin(t * 0.4 + 6.2831 * o);
           float d = length(g + o - f); if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d; }
         return d2 - d1; }
       void main(){
@@ -209,10 +217,10 @@ const barrier = (() => {
         float vis = veil * 0.45 + base * 0.55;
         // most of the dome is invisible most of the time: skip all the expensive vein work there unless a strike is near
         float struck = 0.0;
-        for (int i = 0; i < ${HITS}; i++) { float age = hits[i].w; if (age < 3.0 && dot(n, hits[i].xyz) > cos(min(3.1, age * 0.3 + 0.6))) struck = 1.0; }
+        for (int i = 0; i < ${HITS}; i++) { float age = hits[i].w; if (age < 2.2 && dot(n, hits[i].xyz) > cos(age * 0.3 + 0.3)) struck = 1.0; } // the ring and glow are spent beyond this
         if (vis < 0.003 && struck < 0.5) discard;
         // domain warp that slowly evolves → everything streams and curls
-        vec3 w = vec3(fbm(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
+        vec3 w = vec3(fbm2(p * 0.7 + vec3(0.0, t * 0.035, 0.0)), fbm2(p * 0.7 + vec3(5.2, 1.3, t * 0.03)), fbm2(p * 0.7 + vec3(t * 0.03, 7.7, 2.1)));
         vec3 q = p + (w - 0.5) * 3.2;
         // branching veins: ridges of two noise octaves, thin and bright where they cross
         float v1 = 1.0 - abs(noise(q * 1.6) * 2.0 - 1.0);
@@ -220,11 +228,12 @@ const barrier = (() => {
         float veins = pow(v1, 14.0) + pow(v2, 22.0) * 0.55 * smoothstep(0.6, 1.0, v1 + 0.4);
         // light pulsing along the veins, like blood or sap moving through them
         float flow = 0.35 + 0.65 * pow(0.5 + 0.5 * sin(dot(q, vec3(1.3, 2.1, 0.7)) * 2.2 - t * 1.6), 3.0);
-        float memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35;      // faint walls of the cells
+        float memb = 0.0;                                                     // faint walls of the cells (a 27-cell search,
+        if (vis > 0.03 || struck > 0.5) memb = smoothstep(0.16, 0.0, cells(q * 1.1, t)) * 0.35; // so only where they can show)
         float breathe = 0.75 + 0.25 * sin(t * 0.55 + w.x * 4.0);
         float I = ((veins * flow + memb) * vis * breathe + (veil * 0.02 + base * 0.045) * breathe) * (0.55 + 0.9 * agit);
         for (int i = 0; i < ${HITS}; i++) {
-          float age = hits[i].w; if (age > 3.0) continue;
+          float age = hits[i].w; if (age > 2.2) continue;
           float d = acos(clamp(dot(n, hits[i].xyz), -1.0, 1.0)) + (w.y - 0.5) * 0.04; // wobbly, not a perfect circle
           float ring = exp(-pow((d - age * 0.3) * 22.0, 2.0)) * exp(-age * 1.5);
           float lit = exp(-d * 9.0) * exp(-age * 1.2);                                 // veins near the strike light up
@@ -445,7 +454,7 @@ const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 0, ston
 const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 150, 56), sandMaps, (x, z) => {
   const m = macro(x, z, 1), r = Math.hypot(x, z), P0 = arenaPatches(x, z);
   const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.45;  // churned, darker mud
-  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2;                                       // trodden filth along the wall
+  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2 + smoothstep(16.6, 18.3, r) * 0.22;      // trodden filth and mud along the wall (the same dirt that creeps up it)
   const v = (0.76 + m * 0.26) * (1 - mud - grime) * (1 - P0.track * 0.22);               // tracks: packed down, darker
   let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
   const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
@@ -606,6 +615,34 @@ const woodTex = canvasTex(256, (g, s) => {
   weather(g, s, { streaks: 14, damp: 0.35, dampA: 0.5, blotches: 14, moss: 0.3, grit: 1500 });
 });
 const logMat = surfMat(woodTex, 0.95, 2.5);
+// Where a wall meets the ground (the palisade, stone, plank walls): environmental blending instead of a hard seam. In
+// the material's own shader, the arena's earth creeps up the bottom of the wall with a ragged, noisy edge (mud
+// splashed and trodden against it), the surface turns matte there, and the normals bend toward the ground's normal, so
+// the base of the wall takes the light like the floor does and the lighting break between them disappears. Real-time,
+// so it works with the moving sun and costs a couple of texture reads.
+function groundBlend(mat, base = 0.12, height = 0.85) {
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uGbNoise = { value: noiseTex };
+    sh.vertexShader = 'varying vec3 vGbPos;\n' + sh.vertexShader.replace('#include <project_vertex>', `#include <project_vertex>
+      #ifdef USE_INSTANCING
+        vGbPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+      #else
+        vGbPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+      #endif`);
+    sh.fragmentShader = 'uniform sampler2D uGbNoise; varying vec3 vGbPos;\n' + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float gbJ = texture2D(uGbNoise, vGbPos.xz * 0.9 + vGbPos.y * 0.15).g * 0.6 + texture2D(uGbNoise, vGbPos.xz * 3.1).g * 0.4;
+        float gb = 1.0 - smoothstep(0.0, 1.0, (vGbPos.y - ${base.toFixed(2)}) / ${height.toFixed(2)} + (gbJ - 0.5) * 0.7);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.075, 0.06, 0.045) * (0.75 + 0.5 * gbJ), gb * 0.85); // dark, wet mud`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 1.0, gb);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), gb * 0.22));`);
+  };
+  mat.customProgramCacheKey = () => 'gb' + base + height;
+  return mat;
+}
+groundBlend(logMat);
 const darkWood = surfMat(woodTex, 0.93, 2.5, 0, { color: 0x8a7a6a });
 
 // rough, pitted rust for every bit of old iron
@@ -708,8 +745,11 @@ const stoneMaps = (() => {
   const map = dataTex(cc); map.colorSpace = THREE.SRGBColorSpace;
   return { map, normalMap: dataTex(heightToNormal(Hd, s, 7)), roughnessMap: dataTex(rc) };
 })();
-const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: STONE_SPEC, specularIntensity: 0.4, envMapIntensity: 0.45 });
+// (MeshStandard, not Physical: stone and roofs cover much of the screen, and the physical shader's specular tint was
+// barely visible after the reflection pass; dimmer reflections stand in for the lower specular intensity)
+const stoneM = std(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), envMapIntensity: 0.32 });
 stoneM.userData.world = 3.5;
+groundBlend(stoneM, 0.1, 0.7);
 
 // worn steel: brushed grain, fine bright scratches, dull smudges and pits — a roughness texture so reflections
 // on the hero's armour break up across the surface instead of sliding over it like a mirror
@@ -947,7 +987,7 @@ function buildTown() {
     }
     weather(g, s, { streaks: 20, damp: 0.4, dampA: 0.55, blotches: 18, moss: 0.4, grit: 2000 });
   });
-  const planksM = surfMat(planksTex, 0.95, 2.5, 0, { side: THREE.DoubleSide }); planksM.userData.world = 3;
+  const planksM = groundBlend(surfMat(planksTex, 0.95, 2.5, 0, { side: THREE.DoubleSide }), 0.3, 0.7); planksM.userData.world = 3;
 
   // ---- roofs: four coverings, each a tile texture laid out 8 across × 8 courses so the geometry can match it
   const tileTex = (draw, under) => canvasTex(512, (g, s) => {
@@ -999,8 +1039,8 @@ function buildTown() {
   }, '#2a2214');
   // tw/course: tile size (m); lift: how far each course's butt stands proud; jit: per-tile wobble; sag: belly between eave and ridge
   const ROOF = {
-    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: STONE_SPEC, specularIntensity: 0.35, envMapIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
-    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: STONE_SPEC, specularIntensity: 0.5, envMapIntensity: 0.65, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
+    clay:    { mat: std(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), envMapIntensity: 0.36, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
+    slate:   { mat: std(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), envMapIntensity: 0.39, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
     shingle: { mat: surfMat(shingleTex, 0.95, 2, 0, { side: THREE.DoubleSide }), tw: 0.24, course: 0.24, lift: 0.045, jit: 0.6, sag: 0.12, ridge: 0.1 },
     thatch:  { mat: surfMat(thatchTex, 1, 3, 0, { side: THREE.DoubleSide }), tw: 0.5, course: 0.42, lift: 0.13, jit: 0.3, sag: 0.18, ridge: 0.3, bulge: true },
   };
@@ -1191,19 +1231,37 @@ function buildTown() {
     chimney(g, fw / 2 - 0.4, -fd * 0.25, y + rh * 0.5);
   }
 
-  // houses in rings around the arena, leaving a road open towards the castle; the inner rings are denser and taller
-  for (const [r, n, jitter, mix] of [[27, 24, 1.5, [timberHouse, timberHouse, townhouse, townhouse, plankHouse]], [37, 30, 2, [timberHouse, townhouse, plankHouse, cottage]], [48, 36, 2.5, [timberHouse, plankHouse, cottage, cottage]]]) {
-    let first = null;
+  const houseRings = []; window.__houseRings = houseRings; // (debug: the type sequence of each ring)
+  // houses in rings around the arena, leaving a road open towards the castle; the inner rings are denser and taller.
+  // Every ring has all four types (weighted: the inner ring is mostly tall houses, the outer mostly cottages), so the
+  // 3-house gap between equal types leaves room for variety instead of a rigid pattern.
+  for (const [r, n, jitter, mix] of [[27, 24, 1.5, [timberHouse, timberHouse, townhouse, townhouse, plankHouse, cottage]], [37, 30, 2, [timberHouse, townhouse, plankHouse, cottage]], [48, 36, 2.5, [timberHouse, plankHouse, cottage, cottage, townhouse]]]) {
+    // the plots first, so the choice of house type can look ahead around the ring as well as back
+    const plots = [];
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2 + rand(-0.04, 0.04);
       if (Math.abs(angWrap(a - Math.PI)) < 6 / r) continue;
       if (r === 37 && Math.abs(angWrap(a - 1.05)) < 0.18) continue; // bell tower plot
+      plots.push(a);
+    }
+    // A house type comes back no sooner than 3 houses on: it may not match either of the 2 houses before it, and
+    // near the end of the ring, either of the 2 after it (the ring closes on its first houses). The mix's repeats
+    // still weight the choice. If a ring has too few types to satisfy that everywhere, the gap shrinks to 2 there.
+    const types = [], m = plots.length;
+    for (let k = 0; k < m; k++) {
+      const near = [types[k - 1], types[k - 2]];
+      if (k >= m - 2) near.push(types[(k + 1) % m], types[(k + 2) % m]);
+      let pool = mix.filter(t => !near.includes(t));
+      if (!pool.length) pool = mix.filter(t => t !== types[k - 1] && (k < m - 1 || t !== types[0]));
+      types.push(pool.length ? pick(pool) : pick(mix));
+    }
+    plots.forEach((a, k) => {
       const rr = r + rand(-jitter, jitter);
       const g = new THREE.Group(); g.position.set(Math.sin(a) * rr, 0, Math.cos(a) * rr); g.rotation.y = a + Math.PI + rand(-0.12, 0.12); tmp.add(g);
-      const build = i === n - 1 ? pickNot(mix, look.type, first) : pickNot(mix, look.type); // the ring closes on its first house too
-      look.type = build; first = first || build;
-      build(g);
-    }
+      look.type = types[k]; types[k](g);
+      g.userData.houseType = types[k].name;
+    });
+    houseRings.push(plots.map((a, k) => types[k].name));
   }
   // bell tower
   {
@@ -2372,6 +2430,7 @@ function buildHeroGLB(tpl) {
   return { root, j, sword, swordTip, swordBase, swordMid, sheath, bladeMat: M.metal };
 }
 scene.add(hero.root);
+hero.root.userData.occluder = true; // throws light shafts
 const HJMAP = { spine: 'spine', neck: 'neck', lSh: 'lSh', lEl: 'lEl', rSh: 'rSh', rEl: 'rEl', rHa: 'rHa', lHip: 'lHip', lKn: 'lKn', rHip: 'rHip', rKn: 'rKn', hipR: 'hips' };
 function applyHero(p, k, dt) {
   for (const key of PJ) {
@@ -2519,7 +2578,7 @@ class Beast {
     const pal = PALETTES[Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2))];
     this.name = pal.name;
     this.s = 0.82 + Math.min(level, 6) * 0.03; // smaller than before: roughly chest-high to the hero
-    this.rig = buildBeast(this.s, pal); scene.add(this.rig.root);
+    this.rig = buildBeast(this.s, pal); this.rig.root.userData.occluder = true; scene.add(this.rig.root);
     this.pal = pal;
     this.pos = new V3(x, 0, -19.5); this.yaw = 0; this.vel = new V3();
     this.maxHp = Math.round(190 * (1 + 0.22 * (level - 1))); this.hp = this.maxHp; this.ghostHp = this.hp;
@@ -3168,7 +3227,7 @@ function onPlayerDeath() {
   game.state = 'dead'; game.deadT = 0;
   SFX.thud();
   setTimeout(() => {
-    showOverlay(`<h1>YOU HAVE FALLEN</h1><div class="tag">REACHED ROUND ${toRoman(game.round)}</div>
+    showOverlay(`<div class="logo small"><img class="emblem" src="icon-512.png" alt=""></div><h1>YOU HAVE FALLEN</h1><div class="tag">REACHED ROUND ${toRoman(game.round)}</div>
       <p>Watch the eyes: they flare before every strike. Parry the pecks, step back from the charge, then punish the recovery.</p>
       <button id="startBtn">FIGHT AGAIN</button>`);
   }, 2200);
@@ -3614,7 +3673,7 @@ const prepassed = []; let shadowFrame = 0;
 // and the sun (the hero's head, a beast, the palisade, a roof edge) throws visible shafts of light. Skipped entirely when
 // the sun is behind the camera, set, or buried in cloud.
 const Shafts = (() => {
-  const SCALE = 0.25, N = TOUCH ? 32 : 48;
+  const SCALE = 0.2, N = TOUCH ? 28 : 40;
   const rt = new THREE.WebGLRenderTarget(4, 4, { depthBuffer: true });
   const black = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
   const sunTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 128; const x = c.getContext('2d');
@@ -3640,7 +3699,7 @@ const Shafts = (() => {
   size(); addEventListener('resize', size);
   function render() {
     const D = Daylight.st, oc = sky.material.uniforms.overcast.value;
-    const sunUp = smoothstep(0.0, 0.12, SUN_DIR.y) * (1 - oc * 0.9);
+    const sunUp = smoothstep(0.0, 0.12, SUN_DIR.y) * (1 - smoothstep(0.25, 0.6, oc)); // none once the sky clouds over (it was still paying for a faint 10 % in rain)
     camera.getWorldDirection(fwd);
     const facing = fwd.dot(SUN_DIR);
     if (sunUp < 0.02 || facing < 0.2 || settings.shafts === false) { fresh = false; return; }
@@ -3658,7 +3717,7 @@ const Shafts = (() => {
     if ((odd = !odd) || !fresh) {
       renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 1);
       renderer.autoClear = true; renderer.render(sunScene, camera);                  // the bright sun
-      renderer.autoClear = false; camera.layers.set(0); scene.overrideMaterial = black;
+      renderer.autoClear = false; camera.layers.set(OCC); scene.overrideMaterial = black;
       renderer.render(scene, camera);                                               // everything solid in front of it, black
       scene.overrideMaterial = null; camera.layers.mask = layers;
       renderer.setRenderTarget(null); renderer.setClearColor(clear, ca); fresh = true;
@@ -3669,14 +3728,29 @@ const Shafts = (() => {
   }
   return { render };
 })();
-function drawFrame() {
-  prepassed.length = 0;
+// The layer sort (and the list of meshes for the pre-pass) is rebuilt only when the scene changes (a beast enters, the
+// hero model loads) or every second, not walked every frame. Layer 2 marks the light-shaft occluders: the characters
+// and anything big; pebbles, straw and arrows stay out of that pass.
+const prepassList = []; let sortedFor = -1, sortAge = 0;
+const OCC = 2;
+function sortLayers() {
+  prepassList.length = 0;
   scene.traverse(o => {
     if (!o.isMesh && !o.isPoints && !o.isLine) return;
     const m = o.material;
-    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest && !m.userData.noPrepass) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
-    else o.layers.set(1); // transparent things, particles, lightning, sky, barrier: main pass only
+    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest && !m.userData.noPrepass) {
+      o.layers.set(0); prepassList.push(o);
+      let ch = false; for (let p = o; p; p = p.parent) if (p.userData.occluder) { ch = true; break; }
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      if (ch || (!o.isInstancedMesh && o.geometry.boundingSphere.radius * o.matrixWorld.getMaxScaleOnAxis() > 0.8)) o.layers.enable(OCC);
+    } else o.layers.set(1); // transparent things, particles, lightning, sky, barrier: main pass only
   });
+  sortedFor = scene.children.length; sortAge = 0;
+}
+function drawFrame() {
+  if (scene.children.length !== sortedFor || ++sortAge > 60) sortLayers();
+  prepassed.length = 0;
+  for (const o of prepassList) { if (!o.parent) continue; const m = o.material; prepassed.push(o, m); o.material = depthMats[m.side]; }
   camera.layers.set(0);
   renderer.render(scene, camera);
   for (let i = 0; i < prepassed.length; i += 2) prepassed[i].material = prepassed[i + 1];
@@ -3698,8 +3772,8 @@ function adaptResolution(fdt) {
   const fps = frN / frWin; frWin = 0; frN = 0;
   if (frCool > 0) return;
   let pr = pixelRatio;
-  if (fps < 40 && pr > 0.6) pr = Math.max(0.6, pr - (fps < 25 ? 0.25 : 0.125));
-  else if (fps > 57 && pr < MAX_PR) pr = Math.min(MAX_PR, pr + 0.125);
+  if (fps < 50 && pr > 0.5) pr = Math.max(0.5, pr - (fps < 30 ? 0.25 : 0.125));
+  else if (fps > 58 && pr < MAX_PR) pr = Math.min(MAX_PR, pr + 0.125);
   if (pr === pixelRatio) return;
   pixelRatio = pr; renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight);
   for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
@@ -3774,11 +3848,11 @@ async function preload() {
     await fn();
   };
   let warm;
-  await step('RAISING THE TOWN…', 15, () => buildTown());
+  await step('RAISING THE TOWN…', 15, () => { buildTown(); Math.random = realRandom; }); // the world is built: back to real randomness
   await step('CARVING THE THORNBEAK…', 25, async () => {
     try {
       const h = (await new GLTFLoader().loadAsync('models/hero.glb')).scene;
-      scene.remove(hero.root); Object.assign(hero, buildHeroGLB(h)); scene.add(hero.root);
+      scene.remove(hero.root); Object.assign(hero, buildHeroGLB(h)); hero.root.userData.occluder = true; scene.add(hero.root); sortedFor = -1;
     } catch (e) { console.warn('hero.glb failed to load, using primitive hero', e); }
     try { beastTemplate = (await new GLTFLoader().loadAsync('models/thornbeak.glb')).scene; }
     catch (e) { console.warn('thornbeak.glb failed to load, using primitive model', e); }
