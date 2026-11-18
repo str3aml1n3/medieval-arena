@@ -1676,7 +1676,7 @@ const Weather = (() => {
   // surfaces that get wet: [material, dry roughness]
   const wetMats = [stoneM, logMat, darkWood].map(m => [m, m.roughness]); // the ground has its own, patchy wetness (wetGround)
   let bakedOC = 0, bakedDay = 1, bakedDusk = 0;
-  const N = 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
+  const N = TOUCH ? 700 : 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
   const pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
   for (let i = 0; i < seed.length; i++) seed[i] = Math.random();
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -2663,7 +2663,7 @@ function rimHighlight(mat) {
     sh.uniforms.uHl = hl;
     sh.fragmentShader = 'uniform float uHl;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
       { float rim = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
-        totalEmissiveRadiance += vec3(1.0, 0.68, 0.28) * uHl * (pow(rim, 6.0) * 0.22 + 0.008); }`);
+        totalEmissiveRadiance += vec3(1.0, 0.68, 0.28) * uHl * pow(rim, 7.0) * 0.07; } // just a hint of gold on the outline`);
   };
   return mat;
 }
@@ -3463,7 +3463,8 @@ function begin() {
 $('startBtn').onclick = begin;
 
 // ============================================================ pause menu
-const settings = { sens: 1, sound: 0.6, bright: 1, weather: 'dynamic' };
+// res: 'auto' (adapts to the frame rate) or a fixed share of the full resolution. Phones start without light shafts.
+const settings = { sens: 1, sound: 0.6, bright: 1, weather: 'dynamic', res: 'auto', perf: false, shafts: !TOUCH };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('arena-settings') || '{}')); } catch (e) { /* storage unavailable */ }
 // brightness (like medieval-sim's): scales the tone-mapping exposure, so it lifts the gloom without washing out the sky
 const applyBright = () => Daylight.update(); // brightness scales the exposure, which the time of day also sets
@@ -3478,6 +3479,7 @@ function pauseGame() {
   for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; touch.reset?.();
   $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
   $('optBright').value = settings.bright; $('optWeather').value = settings.weather; $('optShafts').checked = settings.shafts !== false;
+  $('optRes').value = String(settings.res); $('optPerf').checked = !!settings.perf;
   $('pause').classList.remove('hidden');
   if (document.pointerLockElement) document.exitPointerLock();
   Music.duck(true);
@@ -3505,6 +3507,8 @@ $('optLock').onchange = e => { lockOn = e.target.checked; saveSettings(); };
 $('optBright').oninput = e => { settings.bright = +e.target.value; applyBright(); saveSettings(); };
 $('optWeather').onchange = e => { settings.weather = e.target.value; saveSettings(); };
 $('optShafts').onchange = e => { settings.shafts = e.target.checked; saveSettings(); };
+$('optRes').onchange = e => { settings.res = e.target.value === 'auto' ? 'auto' : +e.target.value; applyResSetting(); saveSettings(); };
+$('optPerf').onchange = e => { settings.perf = e.target.checked; perfEl.style.display = settings.perf ? 'block' : 'none'; saveSettings(); };
 // losing pointer lock (the browser eats the first Esc press) or the window losing focus pauses the game
 document.addEventListener('pointerlockchange', () => {
   if (!document.pointerLockElement && performance.now() - resumeGuard > 300) pauseGame();
@@ -4014,23 +4018,28 @@ function adaptResolution(fdt) {
   if (frTimes.reduce((a, b) => a + b, 0) < 2000) return;
   const fms = median(frTimes), gms = gpuTimes.length >= 10 ? median(gpuTimes) : null;
   RES.fps = 1000 / fms; RES.frameMs = fms; RES.gpu = gms; frTimes.length = 0; gpuTimes.length = 0;
-  if (window.__noAdapt || frCool > 0) return;
+  if (window.__noAdapt || frCool > 0 || settings.res !== 'auto') return;
   const pr = pixelRatio, upK = ((pr + 0.125) / pr) ** 2;   // pixels cost ~ the square of the ratio
   if (gms !== null) {                              // decide on the GPU's own time
-    if (gms > 14 && pr > 0.5) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(0.5, pr - (gms > 24 ? 0.25 : 0.125)), `GPU ${gms.toFixed(1)} ms`); } }
+    if (gms > 14 && pr > (TOUCH ? 0.75 : 0.5)) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(TOUCH ? 0.75 : 0.5, pr - (gms > 24 ? 0.25 : 0.125)), `GPU ${gms.toFixed(1)} ms`); } }
     else { slowWins = 0; if (gms * upK < 11 && pr < MAX_PR) setRes(Math.min(MAX_PR, pr + 0.125), `GPU ${gms.toFixed(1)} ms, room to grow`); }
     return;
   }
   // no GPU timing: the median frame time; a frame rate pinned to a cap (30/50/60 Hz) with no jitter isn't the GPU
   const capped = [16.67, 20, 33.33].some(c => Math.abs(fms - c) < 0.6);
-  if (fms > 21 && !capped && pr > 0.5) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(0.5, pr - (fms > 33 ? 0.25 : 0.125)), `frame ${fms.toFixed(1)} ms`); } }
-  else { slowWins = 0; if (fms < 17.5 && pr < MAX_PR) setRes(Math.min(MAX_PR, pr + 0.125), `frame ${fms.toFixed(1)} ms, steady`); }
+  // phones get more leeway: a steady 40 fps is fine on a phone, and below 0.75× the picture turns to mush
+  const slow = TOUCH ? 28 : 21, grow = TOUCH ? 20 : 17.5, floor = TOUCH ? 0.75 : 0.5;
+  if (fms > slow && !capped && pr > floor) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(floor, pr - (fms > 40 ? 0.25 : 0.125)), `frame ${fms.toFixed(1)} ms`); } }
+  else { slowWins = 0; if (fms < grow && pr < MAX_PR) setRes(Math.min(MAX_PR, pr + 0.125), `frame ${fms.toFixed(1)} ms, steady`); }
 }
 // the readout (?perf=1 or F3)
 const perfEl = document.createElement('div');
 perfEl.style.cssText = 'position:fixed;right:12px;top:52px;z-index:8;font:11px/1.45 monospace;color:#e8ddc4;background:rgba(0,0,0,.55);padding:6px 9px;pointer-events:none;white-space:pre;display:none';
 document.body.appendChild(perfEl);
-if (new URLSearchParams(location.search).has('perf')) perfEl.style.display = 'block';
+if (new URLSearchParams(location.search).has('perf') || settings.perf) perfEl.style.display = 'block';
+// a fixed resolution from the pause menu (or back to automatic)
+function applyResSetting() { if (settings.res === 'auto') { RES.last = 'automatic'; frCool = 2; } else setRes(MAX_PR * settings.res, `fixed at ${Math.round(settings.res * 100)} %`); }
+if (settings.res !== 'auto') applyResSetting();
 addEventListener('keydown', e => { if (e.code === 'F3') { e.preventDefault(); perfEl.style.display = perfEl.style.display === 'none' ? 'block' : 'none'; } });
 let perfT = 0;
 function updatePerf(dt) {
@@ -4058,7 +4067,7 @@ function tick(rdt) {
   if (game.state !== 'title') {
     updatePlayer(dt);
     const tg = currentTarget(), cand = !tg && P.drawn && P.state !== 'dead' ? acquireLock() : null;
-    for (const e of beasts) e.hl = e === tg ? 1 : e === cand ? 0.45 : 0;
+    for (const e of beasts) e.hl = e === tg ? 1 : e === cand ? 0.35 : 0;
     if (!window.__freezeAI) for (const e of beasts) e.update(dt);
     separate();
     if (game.state === 'between') {
