@@ -55,6 +55,8 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 Click the game to capture the mouse for turning and camera pitch; pull the mouse up past level to drop the camera low and look up into the sky. The mouse wheel zooms.
 
 ## Development
+The icon (`favicon.ico`, `apple-touch-icon.png`, `icon-512.png`) is drawn by [tools/build_icon.py](tools/build_icon.py): `python3 tools/build_icon.py .` (needs Pillow).
+
 See [docs/GAME.md](docs/GAME.md) for how the game is put together. Add `?auto=1` to the URL to skip the title screen. `window.__game` exposes the game state, and `__game.step(seconds)` runs the world without drawing, which makes quick checks easy from the console.
 
 Several mechanics are adapted from the medieval-sim project: sticky, front-weighted lock-on, beasts reading your swings, knock-downs, the weather, the look-back key, strikes landing where you look, raw mouse input, and the debug hooks.
