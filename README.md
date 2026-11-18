@@ -10,7 +10,7 @@ The hero, an original sell-sword, is built the same way by [tools/build_hero.py]
 
 The town around the arena mixes four kinds of house: timber-framed houses, tall gable-fronted townhouses, plank-walled houses with lean-to sheds, and stone cottages. Their roofs are clay tile, slate, wooden shingle or thatch, built course by course from individual tiles that stand proud of the course below, with uneven, sagging lines. Plaster, stone, wood and iron are darkened and weathered with soot streaks, damp, moss and rust. Two stretches of the arena palisade and its gate have been rebuilt in stone. Neighbouring houses never share a type, roof covering or plaster. The stone is a matched set of colour, normal and roughness maps: the mortar is sunken and dead matte, every block has its own sheen, and wet streaks are slick. Slate and clay roofs get the same treatment from their tile textures, and the hero's steel carries a scratched, smudged roughness texture, so reflections break up across every surface. The arena floor is grey, packed earth with patches of gravel, a ring trodden round the middle, a path in from the gate, and soggy green patches where grass still clings on. It is churned with mud and old stains, has puddles in its hollows, and is littered with straw and spent arrows, some stuck in the sand and the palisade.
 
-The weather changes as you fight. Dry spells and showers take turns: clouds build into a grey lid, the sun is buried, the haze closes in and the light goes flat. Then rain slants across the stockade and splashes in the sand, the ground, stone and timber darken and turn slick, and the barrier strikes more often. Afterwards everything dries out slowly. The pause menu can also hold it dry or keep it raining.
+The time of day follows your own clock: the sun rises at six and crosses the sky, the evening burns orange, and at night the arena is lit by the moon and the torches under a sky full of stars. The weather changes as you fight. Dry spells and showers take turns: clouds build into a grey lid, the sun is buried, the haze closes in and the light goes flat. Then rain slants across the stockade and splashes in the sand, the ground, stone and timber darken and turn slick, and the barrier strikes more often. Afterwards everything dries out slowly. The pause menu can also hold it dry or keep it raining.
 
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
@@ -18,7 +18,7 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Rhythm combos:** attack, then strike again once the cut has landed, when the blade glints, to chain up to six strikes: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. The window lasts through the recovery and a moment after it, so there's time to find the rhythm. Pressing before the cut lands (mashing) breaks the chain and shows TOO EARLY.
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
-- **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
+- **Jump / step back:** Space jumps; locked on, it steps back instead, with brief invulnerability, and can cancel your swing recovery.
 - **Lock-on:** on desktop, hold the action key (LMB / E) to lock on, or press Tab to keep the lock on. On phones it's on by default. It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
 - **From behind:** a cut into a beast's back bites deeper, always staggers it, and even stops a charge.
 - **Knock-down:** a charge that hits you clean, without a parry, throws you flat on your back. Press Space (or attack, or W) to get up. You can't be hurt while you're down or getting up.
@@ -39,7 +39,7 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 | action + S | guard |
 | click LMB / tap E, J | quick forward strike |
 | RMB / K | parry |
-| Space | step back; get up when knocked down |
+| Space | jump; step back when locked on; get up when knocked down |
 | Tab | lock-on |
 | Mouse flick | switch the locked-on beast |
 | R (hold) | look back |

@@ -112,10 +112,13 @@ const SUN_DIR = new V3(0.38, 0.8, 0.46).normalize();
 // a soft sun halo burning through the haze, and lightning that flickers inside the clouds.
 const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.ShaderMaterial({
   side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) }, noiseTex: { value: noiseTex }, overcast: { value: 0 } },
+  uniforms: { sunDir: { value: SUN_DIR }, time: { value: 0 }, flash: { value: 0 }, flashDir: { value: new V3(0, 1, 0) }, noiseTex: { value: noiseTex }, overcast: { value: 0 },
+    dayK: { value: 1 }, duskK: { value: 0 }, moonDir: { value: new V3(0, 1, 0) } },
   vertexShader: `varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
   fragmentShader: `varying vec3 vD; uniform vec3 sunDir; uniform float time; uniform float flash; uniform vec3 flashDir; uniform float overcast;
+    uniform float dayK; uniform float duskK; uniform vec3 moonDir;
     uniform sampler2D noiseTex;
+    float hash3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
     float noise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
       return texture2D(noiseTex, (i + u + 0.5) / 256.0).g; }
     float fbm(vec2 p){ float v = 0.0, a = 0.5; mat2 r = mat2(0.8,-0.6,0.6,0.8); for (int i = 0; i < 6; i++){ v += a*noise(p); p = r*p*2.03; a *= 0.5; } return v; }
@@ -127,8 +130,8 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.Shad
       vec3 c = mix(hor, mid, smoothstep(0.0, 0.22, h));
       c = mix(c, zen, smoothstep(0.18, 0.95, h));
       c = mix(c, vec3(0.30,0.31,0.28), smoothstep(0.0, -0.15, h));
-      float s = max(dot(d, sunDir), 0.0);
-      vec3 sunCol = vec3(1.0,0.86,0.66);
+      float s = max(dot(d, sunDir), 0.0) * smoothstep(-0.06, 0.04, sunDir.y); // no sun glow once it has set
+      vec3 sunCol = mix(vec3(1.0,0.86,0.66), vec3(1.0,0.55,0.28), duskK);   // reddens low on the horizon
       c += sunCol * (pow(s, 5.0) * 0.18 + pow(s, 48.0) * 0.35) * (1.0 - oc * 0.85);
       float cov = 0.0;
       if (h > -0.03) {
@@ -146,11 +149,23 @@ const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 48, 24), new THREE.Shad
         c = mix(c, cc, cov * 0.94);
         float ci = fbm(vec2(uv.x * 0.6, uv.y * 2.4) + w * 2.0);                  // high cirrus streaks
         c = mix(c, vec3(0.80,0.80,0.80), smoothstep(0.55, 0.9, ci) * 0.18 * (1.0 - cov) * smoothstep(0.05, 0.4, h));
-        float g = pow(max(dot(d, flashDir), 0.0), 10.0);                         // lightning lights the clouds from inside
-        c += vec3(0.55,0.65,1.0) * flash * g * (0.25 + cov * 1.4);
+        // dusk and dawn: cloud undersides catch the low sun
+        c += vec3(0.55,0.22,0.06) * duskK * cov * (0.3 + lit * 0.7) * (1.0 - oc * 0.7) * smoothstep(-0.2, 0.6, dot(normalize(d.xz + 1e-4), normalize(sunDir.xz + 1e-4)));
       }
       c = mix(c, hor * 1.04, exp(-max(h, 0.0) * 10.0) * 0.55);                    // thick haze on the horizon
       c += sunCol * pow(s, 1400.0) * 5.0 * (1.0 - cov * 0.9) * (1.0 - oc);
+      // golden hour: the horizon toward the sun burns orange
+      float toSun = pow(max(dot(normalize(vec3(d.x, 0.0, d.z) + 1e-4), normalize(vec3(sunDir.x, 0.0, sunDir.z) + 1e-4)), 0.0), 3.0);
+      c = mix(c, c * vec3(1.45, 0.82, 0.55) + vec3(0.16, 0.05, 0.0) * toSun, duskK * exp(-max(h, 0.0) * 4.0) * (0.5 + 0.5 * toSun) * (1.0 - oc * 0.6));
+      // night: the whole sky goes dark blue, then stars and the moon come out where the clouds part
+      c *= mix(vec3(0.05, 0.065, 0.11), vec3(1.0), dayK);
+      float clear = (1.0 - cov) * (1.0 - oc) * (1.0 - dayK) * smoothstep(0.04, 0.3, h);
+      vec3 sd = d * 420.0; float st = hash3(floor(sd));
+      c += vec3(0.85, 0.9, 1.0) * step(0.9965, st) * (0.5 + 0.5 * sin(time * (2.0 + st * 7.0) + st * 60.0)) * clear * 1.2;
+      float m = max(dot(d, moonDir), 0.0);
+      c += vec3(0.9, 0.93, 1.0) * (smoothstep(0.99975, 0.99985, m) * 1.4 + pow(m, 60.0) * 0.08) * (1.0 - dayK) * (1.0 - cov * 0.85);
+      // lightning lights the clouds from inside (after the night darkening: a flash is just as bright at night)
+      if (h > -0.03) c += vec3(0.55,0.65,1.0) * flash * pow(max(dot(d, flashDir), 0.0), 10.0) * (0.25 + cov * 1.4);
       gl_FragColor = vec4(c, 1.0);
     }`
 }));
@@ -440,7 +455,7 @@ sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't
 // hollows go first (dark and glossy, almost like standing water) while bumps stay damp and matte, and the wet area
 // grows the longer it rains. `uWet` is the weather's soak level (0 dry .. 1 soaked).
 const groundWet = { value: 0 };
-function wetGround(mat, scale = 1) {
+function wetGround(mat, scale = 1, persist = 0) {
   mat.onBeforeCompile = sh => {
     sh.uniforms.uWet = groundWet; sh.uniforms.uNoiseW = { value: noiseTex };
     sh.vertexShader = 'varying vec3 vWetPos;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWetPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -448,12 +463,13 @@ function wetGround(mat, scale = 1) {
       .replace('#include <color_fragment>', `#include <color_fragment>
         float wn = texture2D(uNoiseW, vWetPos.xz * ${(0.0016 * scale).toFixed(5)}).g * 0.62 + texture2D(uNoiseW, vWetPos.xz * ${(0.0062 * scale).toFixed(5)} + 0.37).g * 0.38;
         float wetM = smoothstep(0.74 - 0.36 * uWet, 0.86 - 0.34 * uWet, wn) * smoothstep(0.02, 0.25, uWet);
+        wetM = max(wetM, smoothstep(0.8, 0.88, wn) * ${persist.toFixed(2)});  // the deepest hollows never quite dry out
         diffuseColor.rgb *= 1.0 - 0.14 * uWet - 0.3 * wetM;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(roughnessFactor * (1.0 - 0.12 * uWet), 0.14, wetM);`);
   };
 }
-wetGround(sandFloor.material);
+wetGround(sandFloor.material, 1, 0.8);
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
 const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 120, 60), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
@@ -744,26 +760,12 @@ const metalRough = (() => {
       m.receiveShadow = true; m.renderOrder = order; scene.add(m);
     }
   };
-  const pools = [];
-  const wetTex = blot('26,19,12', 40, 0.6), mudTex = blot('38,30,20', 30, 0.5), oldBlood = blot('48,12,8', 26, 0.35);
-  // puddles: a flat sheet of water at a level between the lowest and the average ground in its patch, so it only
-  // shows where the sand dips; ragged natural shorelines come from the terrain cutting through it
-  const waterM = phys(0x14110d, 0.06, 0, { clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, opacity: 0.88, envMapIntensity: 1.1, specularColor: COLD_SPEC });
-  for (const [a, r, R] of [[0.6, 7, 1.3], [2.4, 11, 1.0], [-1.9, 5, 1.6], [-0.4, 13.5, 0.9], [3.6, 9, 1.2], [1.6, 3, 0.8]]) {
-    const x = Math.sin(a) * r, z = Math.cos(a) * r;
-    let sum = 0, n = 0, lo = 1e9;
-    for (let i = 0; i < 60; i++) { const q = rand(0, 6.28), d = Math.sqrt(Math.random()) * R, h = groundH(x + Math.cos(q) * d, z + Math.sin(q) * d); sum += h; n++; lo = Math.min(lo, h); }
-    const level = lerp(lo, sum / n, 0.85) + 0.004;
-    const geo = new THREE.CircleGeometry(R, 48); geo.rotateX(-Math.PI / 2);
-    const p = geo.attributes.position;
-    for (let i = 1; i < p.count; i++) { const k = 1 + 0.25 * Math.sin(Math.atan2(p.getZ(i), p.getX(i)) * 3 + a) + 0.12 * Math.sin(i * 1.7); p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k); }
-    geo.translate(x, level, z); pools.push(geo);
-    decal(drape(x, z, R * 1.9, 0.006), wetTex, 0.45, x, z, 1); // dark, damp sand around it
-  }
+  // (the old fixed puddles are gone: standing water now comes from the same patchy wetness as the rain, see wetGround,
+  // with a few deep hollows that never quite dry out)
+  const mudTex = blot('38,30,20', 30, 0.5), oldBlood = blot('48,12,8', 26, 0.35);
   for (let i = 0; i < 9; i++) { const a = rand(0, 6.28), r = rand(2, 15), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(1.2, 2.6), 0.005), mudTex, 0.85, x, z, 0); }
   for (let i = 0; i < 10; i++) { const a = rand(0, 6.28), r = rand(1, 14), x = Math.sin(a) * r, z = Math.cos(a) * r; decal(drape(x, z, rand(0.4, 1.0), 0.007), oldBlood, 0.6, x, z, 2); }
   flushDecals();
-  { const w = new THREE.Mesh(mergeGeometries(pools), waterM); w.receiveShadow = true; scene.add(w); }
 
   // arrows from earlier bouts: stuck in the sand, lying broken, and buried in the palisade logs
   const arrows = new THREE.Group();
@@ -1534,10 +1536,53 @@ function updateTorches(dt, time) {
     }
     if (t.light) {
       const f = Math.sin(time * 11 + t.seed) * 0.5 + Math.sin(time * 23.7 + t.seed * 2) * 0.3 + Math.sin(time * 5.3 + t.seed) * 0.2;
-      t.light.intensity = 10 * (0.85 + 0.15 * f);
+      t.light.intensity = 10 * (0.85 + 0.15 * f) * Daylight.torch;
     }
   }
 }
+
+// ============================================================ day and night
+// The sun follows the player's own clock: up at 6:00, highest at noon, down at 18:00, with a golden hour either side;
+// at night the moon (opposite the sun) lights the arena faintly in blue, the stars come out and the torches carry the
+// scene. ?hour=21.5 in the URL (or __game.setHour) fixes the time, for testing.
+const Daylight = (() => {
+  const q = new URLSearchParams(location.search);
+  let fixed = q.has('hour') ? parseFloat(q.get('hour')) : null;
+  const st = { hour: 12, day: 1, dusk: 0, night: 0, torch: 1, sunI: 2.75, fillI: 1.1, hemiI: 0.55, fog: new THREE.Color(0x8e9296), fogWet: new THREE.Color(0x676d71) };
+  const SUN_C = new THREE.Color(0xffeccc), DUSK_C = new THREE.Color(0xff9a55), MOON_C = new THREE.Color(0x9fb4e0);
+  const HEMI_DAY = new THREE.Color(0xcfe0ff), HEMI_NIGHT = new THREE.Color(0x3a4a6e), GROUND_DAY = new THREE.Color(0x6a5a40), GROUND_NIGHT = new THREE.Color(0x1c1914);
+  const FOG_DAY = new THREE.Color(0x8e9296), FOG_NIGHT = new THREE.Color(0x141922), FOG_DUSK = new THREE.Color(0x9a7f70);
+  const moon = new V3();
+  function update() {
+    const now = new Date();
+    const h = fixed ?? now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+    st.hour = h;
+    const el = Math.sin((h - 6) / 12 * Math.PI) * 0.95;         // sun elevation (rad): about 54° at noon, -54° at midnight
+    const az = (h / 24) * Math.PI * 2 + 0.6;
+    SUN_DIR.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+    moon.set(-SUN_DIR.x, Math.max(0.25, -SUN_DIR.y), -SUN_DIR.z).normalize();
+    st.day = smoothstep(-0.14, 0.22, SUN_DIR.y); st.night = 1 - st.day;
+    st.dusk = Math.exp(-(((SUN_DIR.y - 0.04) / 0.16) ** 2));
+    // one directional light: the sun while it is up, the moon after it sets (it is dim around the switch, so no pop)
+    if (SUN_DIR.y > 0.0) {
+      sun.position.copy(SUN_DIR).multiplyScalar(60); sun.color.copy(SUN_C).lerp(DUSK_C, st.dusk);
+      st.sunI = 2.75 * smoothstep(0.0, 0.2, SUN_DIR.y);
+    } else {
+      sun.position.copy(moon).multiplyScalar(60); sun.color.copy(MOON_C);
+      st.sunI = 0.95 * smoothstep(0.0, 0.18, -SUN_DIR.y);
+    }
+    st.fillI = 1.1 * lerp(0.2, 1, st.day); st.hemiI = 0.55 * lerp(0.55, 1, st.day); // moonlit nights: dark, but you can still fight
+    hemi.color.copy(HEMI_NIGHT).lerp(HEMI_DAY, st.day); hemi.groundColor.copy(GROUND_NIGHT).lerp(GROUND_DAY, st.day);
+    st.fog.copy(FOG_NIGHT).lerp(FOG_DAY, st.day).lerp(FOG_DUSK, st.dusk * 0.55);
+    st.fogWet.copy(FOG_NIGHT).lerp(new THREE.Color(0x676d71), st.day);
+    st.torch = 1 + 0.9 * st.night;
+    const u = sky.material.uniforms; u.dayK.value = st.day; u.duskK.value = st.dusk; u.moonDir.value.copy(moon);
+    let bright = 1; try { bright = settings.bright; } catch (e) { /* settings aren't loaded yet on the first call */ }
+    renderer.toneMappingExposure = 0.9 * bright * (1 + 0.6 * st.night);
+  }
+  update();
+  return { st, update, get torch() { return st.torch; }, setHour(hh) { fixed = hh; update(); } };
+})();
 
 // ============================================================ weather
 // After medieval-sim's dynamic weather: dry spells and showers take turns. Clouds build up over half a minute and close
@@ -1546,11 +1591,11 @@ function updateTorches(dt, time) {
 // darken and turn slick while it rains and dry out slowly afterwards. Pause menu: Changing / Dry / Rain.
 const Weather = (() => {
   const wx = { cloud: 0, rain: 0, wet: 0, want: false, t: rand(70, 160) };
-  const FOG_DRY = new THREE.Color(0x8e9296), FOG_WET = new THREE.Color(0x676d71), FOG_D = 0.0058;
+  const FOG_D = 0.0058; // fog colours come from the time of day (Daylight)
   const smooth = x => x * x * (3 - 2 * x);
   // surfaces that get wet: [material, dry roughness]
   const wetMats = [stoneM, logMat, logMatAO, darkWood].map(m => [m, m.roughness]); // the ground has its own, patchy wetness (wetGround)
-  let bakedOC = 0;
+  let bakedOC = 0, bakedDay = 1, bakedDusk = 0;
   const N = 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
   const pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
   for (let i = 0; i < seed.length; i++) seed[i] = Math.random();
@@ -1583,11 +1628,15 @@ const Weather = (() => {
     const c = smooth(wx.cloud), w = wx.wet;
     // sky, haze and light
     sky.material.uniforms.overcast.value = c;
-    scene.fog.color.lerpColors(FOG_DRY, FOG_WET, c); scene.fog.density = FOG_D * (1 + 0.9 * c);
-    sun.intensity = 2.75 * (1 - 0.62 * c); coldFill.intensity = 1.1 * (1 - 0.35 * c); hemi.intensity = 0.55 * (1 + 0.15 * c);
+    const D = Daylight.st;
+    scene.fog.color.lerpColors(D.fog, D.fogWet, c); scene.fog.density = FOG_D * (1 + 0.9 * c);
+    sun.intensity = D.sunI * (1 - 0.62 * c); coldFill.intensity = D.fillI * (1 - 0.35 * c); hemi.intensity = D.hemiI * (1 + 0.15 * c);
     for (const [m, r] of wetMats) { m.roughness = r * (1 - 0.3 * w); m.color.setScalar(1 - 0.22 * w); }
     groundWet.value = w;
-    if (Math.abs(c - bakedOC) > 0.2 || (c !== bakedOC && (c === 0 || c === 1))) { bakedOC = c; rebakeEnv(); } // re-take the sky reflection
+    // re-take the sky reflection when the clouds or the time of day have changed enough
+    if (Math.abs(c - bakedOC) > 0.2 || (c !== bakedOC && (c === 0 || c === 1)) || Math.abs(D.day - bakedDay) > 0.08 || Math.abs(D.dusk - bakedDusk) > 0.15) {
+      bakedOC = c; bakedDay = D.day; bakedDusk = D.dusk; rebakeEnv();
+    }
     // rain streaks: each drop loops through a box that moves with the camera, slanted by the wind
     const r = wx.rain;
     lines.visible = r > 0.01;
@@ -2079,6 +2128,8 @@ const POSE = {
   spinS: pose({ spine: [0.28, -1.1, 0], neck: [-0.1, 0.95, 0], rSh: [-0.4, 0, -1.45], rEl: [-0.05, 0, 0], rHa: [0.3, 0, 0], lSh: [-0.7, 0, 0.5], lEl: [-0.9, 0, 0], lHip: [-0.75, 0, 0.08], lKn: [0.85, 0, 0], rHip: [0.45, 0, -0.08], rKn: [0.4, 0, 0], hy: -0.2 }),
   block: pose({ spine: [0.12, 0.15, 0], neck: [-0.05, -0.15, 0], rSh: [-1.25, 0, 0.25], rEl: [-1.25, 0, 0], rHa: [0.65, 1.35, 0], lSh: [-1.0, 0, 0.1], lEl: [-1.4, 0, 0], lHip: [-0.42, 0, 0.06], lKn: [0.55, 0, 0], rHip: [0.32, 0, -0.08], rKn: [0.45, 0, 0], hy: -0.1 }),
   hurt: pose({ spine: [-0.45, 0, 0.15], neck: [-0.4, 0, 0], rSh: [-0.2, 0, -0.6], rEl: [-0.6, 0, 0], lSh: [-0.1, 0, 0.7], lEl: [-0.4, 0, 0], lHip: [0.2, 0, 0], lKn: [0.4, 0, 0], rHip: [-0.3, 0, 0], rKn: [0.5, 0, 0], hy: -0.08 }),
+  jumpUp: pose({ spine: [0.12, 0, 0], neck: [-0.1, 0, 0], rSh: [-0.7, 0, -0.45], rEl: [-0.9, 0, 0], lSh: [-0.6, 0, 0.5], lEl: [-0.8, 0, 0], lHip: [-1.0, 0, 0.05], lKn: [1.4, 0, 0], rHip: [-0.35, 0, -0.05], rKn: [0.7, 0, 0], hy: -0.02 }),
+  jumpDown: pose({ spine: [0.05, 0, 0], neck: [0.05, 0, 0], rSh: [-0.35, 0, -0.6], rEl: [-0.6, 0, 0], lSh: [-0.25, 0, 0.65], lEl: [-0.5, 0, 0], lHip: [-0.55, 0, 0.06], lKn: [0.75, 0, 0], rHip: [-0.4, 0, -0.06], rKn: [0.6, 0, 0], hy: 0 }),
   hurtB: pose({ spine: [0.55, 0, -0.12], neck: [0.35, 0, 0], rSh: [0.5, 0, -0.7], rEl: [-0.5, 0, 0], lSh: [0.6, 0, 0.8], lEl: [-0.3, 0, 0], lHip: [-0.5, 0, 0], lKn: [0.6, 0, 0], rHip: [0.3, 0, 0], rKn: [0.3, 0, 0], hy: -0.1 }),
   down: pose({ spine: [-0.15, 0, 0.05], neck: [-0.3, 0.3, 0], rSh: [-0.4, 0, -1.2], rEl: [-0.4, 0, 0], lSh: [-0.3, 0, 1.1], lEl: [-0.6, 0, 0], lHip: [-0.6, 0, 0.12], lKn: [1.0, 0, 0], rHip: [-0.15, 0, -0.1], rKn: [0.35, 0, 0] }),
   dodge: pose({ spine: [0.32, 0, 0], neck: [-0.25, 0, 0], rSh: [-0.4, 0, -0.5], rEl: [-0.9, 0, 0], lSh: [-0.3, 0, 0.6], lEl: [-0.8, 0, 0], lHip: [-0.9, 0, 0], lKn: [1.2, 0, 0], rHip: [-0.35, 0, 0], rKn: [1.0, 0, 0], hy: -0.22 }),
@@ -2123,6 +2174,25 @@ function buildHeroGLB(tpl) {
   const root = new THREE.Group(); root.rotation.order = 'YXZ'; root.add(model);
   const j = { hips: f('Hips'), spine: f('Spine'), neck: f('Neck'), lSh: f('ShoulderL'), lEl: f('ElbowL'), lHa: f('HandL'),
     rSh: f('ShoulderR'), rEl: f('ElbowR'), rHa: f('HandR'), lHip: f('HipL'), lKn: f('KneeL'), rHip: f('HipR'), rKn: f('KneeR') };
+  // Ball-joint fillers. The model is rigid parts hanging off joints, so when a shoulder turns, the top of the arm swings
+  // away from the chest and leaves a gap. A padded shoulder mass sits on the torso at each shoulder pivot (a ball joint:
+  // whatever the arm's angle, the arm's root stays buried in it), with a slope of quilting up to the neck. Vertex
+  // colours darken the armpit side, like the model's baked occlusion.
+  const shade = (geo, k0, k1) => {
+    const p = geo.attributes.position, c = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) { const v = lerp(k0, k1, clamp(p.getY(i) / 0.09 * 0.5 + 0.5, 0, 1)); c[i * 3] = c[i * 3 + 1] = c[i * 3 + 2] = v; }
+    geo.setAttribute('color', new THREE.BufferAttribute(c, 3)); return geo;
+  };
+  model.updateMatrixWorld(true);
+  for (const [sh, s] of [[j.lSh, 1], [j.rSh, -1]]) {
+    if (!sh || !j.spine) continue;
+    const at = j.spine.worldToLocal(sh.getWorldPosition(new V3()));
+    const ball = new THREE.Mesh(shade(new THREE.SphereGeometry(0.088, 16, 12), 0.45, 1), M.cloth);
+    ball.position.copy(at).add(new V3(-s * 0.012, -0.012, 0)); ball.scale.set(1, 0.95, 1.08);
+    const trap = new THREE.Mesh(shade(new THREE.SphereGeometry(0.075, 14, 10), 0.6, 1), M.cloth);
+    trap.position.copy(at).multiply(new V3(0.55, 1, 1)).add(new V3(0, 0.005, -0.01)); trap.scale.set(1.6, 0.75, 1.15);
+    for (const m of [ball, trap]) { m.castShadow = m.receiveShadow = true; j.spine.add(m); }
+  }
   const sword = f('Sword'), scab = f('Scabbard');
   sword.removeFromParent(); scab.removeFromParent();
   const mk = z => { const o = new THREE.Object3D(); o.position.z = z; sword.add(o); return o; };
@@ -2151,7 +2221,7 @@ const P = {
   pos: new V3(0, 0, 7), yaw: Math.PI, vel: new V3(), hp: 100, maxHp: 100, st: 100, maxSt: 100,
   drawn: false, state: 'idle', t: 0, step: 0, swing: null, swingType: '', times: null, queued: false, failed: false,
   hitSet: new Set(), iframes: 0, stunDur: 0, gait: 0, lastSg: 1, stDelay: 0, swapDone: false, swungSound: false, dodgeDir: new V3(),
-  combo: 0, comboT: 0, ghostHp: 100, gaitW: 0, bank: 0, prevYaw: Math.PI, visYaw: 0, seg: -1, swingId: 0, hurtBack: false,
+  combo: 0, comboT: 0, ghostHp: 100, gaitW: 0, bank: 0, prevYaw: Math.PI, visYaw: 0, seg: -1, swingId: 0, hurtBack: false, jy: 0, vy: 0, jumpVel: new V3(),
 };
 // knocked down or getting up: no control, no turning
 const isDown = () => P.state === 'dead' || P.state === 'down' || P.state === 'getup';
@@ -2636,6 +2706,13 @@ function updatePlayer(dt) {
     P.dodgeDir.copy(dirx); SFX.dodge(); dust(P.pos, 5, 0.3, 0.8); trail.samples.length = 0;
   };
   const startDraw = () => { P.state = 'draw'; P.t = 0; P.swapDone = false; };
+  // a jump: a ballistic hop (gravity 14 m/s²) that keeps the run-up's momentum, with a little steering in the air
+  const startJump = fwd => {
+    P.state = 'jump'; P.t = 0; P.vy = 4.9; P.jumpVel.set(P.vel.x, 0, P.vel.z);
+    if (fwd && P.jumpVel.length() < 2) P.jumpVel.addScaledVector(fwdV, 2);
+    if (P.drawn) { P.st -= 8; P.stDelay = 0.5; }
+    SFX.dodge(); dust(P.pos, 4, 0.3, 0.6); trail.samples.length = 0;
+  };
 
   switch (P.state) {
     case 'idle':
@@ -2648,7 +2725,9 @@ function updatePlayer(dt) {
         const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
         if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
       }
-      if (wantDodge && P.drawn && P.st >= 18) { startDodge(); break; }
+      // Space: locked on, a step back (with a moment of invulnerability); otherwise a jump
+      if (wantDodge && target && P.st >= 18) { startDodge(); break; }
+      if (wantDodge && !target && P.jy <= 0 && (!P.drawn || P.st >= 8)) { startJump(fw); break; }
       P.state = wantBlock && P.drawn ? 'block' : 'idle';
       let turn = 0, f = 0, s = 0;
       if (js.active) { // analog: how far the stick is pushed sets the speed
@@ -2698,7 +2777,8 @@ function updatePlayer(dt) {
         startAttack(P.step + 1, q.l, q.r, target);
         break;
       }
-      if (wantDodge && P.t > w + a && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
+      if (wantDodge && P.t > w + a && target && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
+      if (wantDodge && P.t > w + a && !target && P.st >= 8) { startJump(fw); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
       if (!P.swungSound && P.t >= w * 0.7) { SFX.swing(P.step); P.swungSound = true; }
       if (P.t < w && target) P.yaw = dampAng(P.yaw, yawTo(P.pos, target.pos), 10, dt);
       else if (P.t < w) { if (lf) P.yaw += 1.2 * dt; if (rt) P.yaw -= 1.2 * dt; }
@@ -2725,6 +2805,21 @@ function updatePlayer(dt) {
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
       if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); if (!P.failed) { P.chainGrace = 0.3; P.lastStep = P.step; } }
+      break;
+    }
+    case 'jump': {
+      P.t += dt; P.vy -= 14 * dt; P.jy += P.vy * dt;
+      desired.copy(P.jumpVel); velK = 1.2;
+      if (fw) desired.addScaledVector(fwdV, 1.5); if (bw) desired.addScaledVector(fwdV, -1);
+      if (!target) { if (lf) P.yaw += 1.6 * dt; if (rt) P.yaw -= 1.6 * dt; }
+      tp = P.vy > 0 ? POSE.jumpUp : POSE.jumpDown; k = 12;
+      if (P.jy <= 0 && P.vy < 0) { P.jy = 0; P.vy = 0; P.state = 'land'; P.t = 0; SFX.step(true); dust(P.pos, 6, 0.4, 0.8); }
+      break;
+    }
+    case 'land': { // knees soak up the landing
+      P.t += dt; tp = POSE.dodge; k = 20; velK = 8;
+      if (fw) desired.copy(fwdV).multiplyScalar(2);
+      if (P.t > 0.14) P.state = 'idle';
       break;
     }
     case 'dodge': {
@@ -2848,7 +2943,9 @@ function updatePlayer(dt) {
   const l = Math.hypot(P.pos.x, P.pos.z);
   if (l > ARENA_R) { P.pos.x *= ARENA_R / l; P.pos.z *= ARENA_R / l; }
   hero.root.position.x = P.pos.x; hero.root.position.z = P.pos.z;
-  if (!isDown()) { hero.root.position.y = groundH(P.pos.x, P.pos.z); hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
+  // knocked out of a jump (hit in the air): he still falls back down
+  if (P.state !== 'jump' && P.jy > 0) { P.vy -= 14 * dt; P.jy = Math.max(0, P.jy + P.vy * dt); if (P.jy === 0) P.vy = 0; }
+  if (!isDown()) { hero.root.position.y = groundH(P.pos.x, P.pos.z) + P.jy; hero.root.rotation.x = 0; hero.root.rotation.z = 0; }
   hero.root.rotation.y = P.yaw + P.visYaw;
   hero.root.updateMatrixWorld(true);
   if (P.state === 'attack') {
@@ -2908,7 +3005,7 @@ function onPlayerDeath() {
   }, 2200);
 }
 function resetGame() {
-  Object.assign(P, { hp: P.maxHp, st: P.maxSt, state: 'idle', t: 0, combo: 0, ghostHp: P.maxHp, iframes: 0, pain: 0 });
+  Object.assign(P, { hp: P.maxHp, st: P.maxSt, state: 'idle', t: 0, combo: 0, ghostHp: P.maxHp, iframes: 0, pain: 0, jy: 0, vy: 0 });
   P.pos.set(0, 0, 7); P.vel.set(0, 0, 0); P.yaw = Math.PI;
   hero.root.rotation.x = 0; hero.root.position.y = 0;
   for (const d of decals) d.visible = false;
@@ -2934,7 +3031,7 @@ $('startBtn').onclick = begin;
 const settings = { sens: 1, sound: 0.6, bright: 1, weather: 'dynamic' };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('arena-settings') || '{}')); } catch (e) { /* storage unavailable */ }
 // brightness (like medieval-sim's): scales the tone-mapping exposure, so it lifts the gloom without washing out the sky
-const applyBright = () => { renderer.toneMappingExposure = 0.9 * settings.bright; };
+const applyBright = () => Daylight.update(); // brightness scales the exposure, which the time of day also sets
 applyBright();
 const saveSettings = () => { try { localStorage.setItem('arena-settings', JSON.stringify({ ...settings, music: Music.volume, lockOn, lockV: 2 })); } catch (e) { /* ignore */ } };
 try { const st = JSON.parse(localStorage.getItem('arena-settings') || '{}'); if (typeof st.lockOn === 'boolean' && st.lockV === 2) lockOn = st.lockOn; /* older saves stored the old always-on default */ if (typeof st.music === 'number') Music.setVolume(st.music); } catch (e) { /* ignore */ }
@@ -2959,7 +3056,10 @@ function resumeGame() {
   lockPointer();
 }
 // build stamp (version.js), shown on the loading, title and pause screens so you can tell which version is deployed
-$('build').textContent = `BUILD ${BUILD.build} · ${BUILD.date}`;
+{ // shown in the player's own time zone
+  const d = new Date(BUILD.date);
+  $('build').textContent = `BUILD ${BUILD.build} · ${isNaN(d) ? BUILD.date : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
+}
 $('resumeBtn').onclick = resumeGame;
 $('ctlBtn').onclick = () => $('pctl').classList.toggle('open');
 $('restartBtn').onclick = () => { resumeGame(); resetGame(); };
@@ -3189,13 +3289,13 @@ function updateCamera(dt) {
   const back = !!keys.KeyR && !target && !isDown(), wantYaw = P.yaw + (back ? Math.PI : 0), snap = back !== lookBack;
   lookBack = back;
   camYaw = snap ? wantYaw : dampAng(camYaw, wantYaw, target ? 7 : 5, dt);
-  const hor = camDist * Math.cos(camPitch), h = 1.55 + camDist * Math.sin(camPitch);
+  const hor = camDist * Math.cos(camPitch), h = 1.55 + camDist * Math.sin(camPitch) + P.jy * 0.5; // the camera rises a little with a jump
   const cp = new V3(P.pos.x - Math.sin(camYaw) * hor, h, P.pos.z - Math.cos(camYaw) * hor);
   const rl = Math.hypot(cp.x, cp.z);
   if (rl > 18.0) { cp.x *= 18.0 / rl; cp.z *= 18.0 / rl; }
   cp.y = Math.max(cp.y, groundH(cp.x, cp.z) + 0.4); // below level the camera hugs the ground and tilts its gaze up instead
   const gazeUp = clamp((0.12 - camPitch) * 1.9, 0, 1.38);
-  const look = new V3(P.pos.x, 1.45, P.pos.z).addScaledVector(new V3(Math.sin(camYaw), 0, Math.cos(camYaw)), 1.2);
+  const look = new V3(P.pos.x, 1.45 + P.jy * 0.6, P.pos.z).addScaledVector(new V3(Math.sin(camYaw), 0, Math.cos(camYaw)), 1.2);
   if (target) look.lerp(new V3(target.pos.x, 1.2, target.pos.z), 0.22 * (1 - gazeUp / 1.38));
   look.y += Math.tan(gazeUp) * (hor + 1.2);
   if (snap) { camLook.copy(look); camera.position.copy(cp); }
@@ -3299,7 +3399,7 @@ function updateHUD(dt) {
   } else eb.style.opacity = 0;
   // a small gold chevron over the locked beast's head
   if (touch.enabled) $('touch').style.visibility = game.state === 'title' || !$('overlay').classList.contains('hidden') ? 'hidden' : '';
-  if (touch.enabled) { $('bLock').classList.toggle('lit', lockOn); $('bDraw').textContent = P.drawn ? 'SHEATHE' : 'DRAW'; }
+  if (touch.enabled) { $('bDodge').textContent = currentTarget() ? 'STEP' : 'JUMP'; $('bLock').classList.toggle('lit', lockOn); $('bDraw').textContent = P.drawn ? 'SHEATHE' : 'DRAW'; }
   const lm = $('lockmark'), lt = currentTarget();
   if (lt && game.state !== 'title') {
     const v = tmpV2.set(lt.pos.x, groundH(lt.pos.x, lt.pos.z) + 2.6 * lt.s, lt.pos.z).project(camera);
@@ -3355,6 +3455,7 @@ function drawFrame() {
 }
 // Dynamic resolution: almost all the frame time is pixel shading, so when the frame rate sags (a phone, a weak laptop)
 // the render resolution steps down, and it steps back up when there is headroom. Judged over 2-second windows.
+let daylightT = 0;
 let prevNow = performance.now(), frWin = 0, frN = 0, frCool = 3;
 function adaptResolution(fdt) {
   if (!(fdt > 0) || fdt > 0.5) return; // tab switches, hitches
@@ -3400,6 +3501,7 @@ function tick(rdt) {
     applyHero(POSE.relaxed, 6, dt);
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
+  if ((daylightT -= rdt) <= 0) { daylightT = 2; Daylight.update(); } // the clock moves slowly: a few updates a minute is plenty
   updateTorches(dt, time);
   grassWind.value += dt * (1 + Weather.rain * 0.6); // a storm blows harder
   Weather.update(dt, time);
@@ -3420,7 +3522,7 @@ window.__game = {
   P, beasts, hero, camera, scene, THREE, game, settings, Weather, POSE,
   startRound, resetGame, startAttack, hitPlayer, currentTarget, switchTarget, acquireLock, barrierSpawn: barrier.spawn,
   get lockTarget() { return lockTarget; }, get lockOn() { return lockOn; }, set lockOn(v) { lockOn = v; },
-  press(code) { pressed.add(code); },
+  press(code) { pressed.add(code); }, Daylight, setHour: h => { Daylight.setHour(h); },
   renderer, draw: () => drawFrame(),
   // debug: average cost of a frame (simulation + drawing) over n frames, and what the renderer drew
   bench(n = 5) { renderer.setPixelRatio(1); const t0 = performance.now(); for (let i = 0; i < n; i++) { tick(1 / 60); drawFrame(); renderer.getContext().finish(); } const ms = (performance.now() - t0) / n; renderer.setPixelRatio(pixelRatio); return { ms: +ms.toFixed(1), calls: renderer.info.render.calls, tris: renderer.info.render.triangles }; }, hold(code, v = true) { keys[code] = v; },
