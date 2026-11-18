@@ -5,6 +5,20 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const V3 = THREE.Vector3;
+// Specular occlusion (approximate). The sky reflection (the environment map) reaches every surface, even where sun and
+// torches don't, and that is what makes dull things look lacquered and lit up: shadowed stone, the hero's leather,
+// feathers. Here a non-metal's sky reflection fades with how much direct light actually reaches the point (its direct
+// diffuse light divided by its albedo), down to a third in full shadow. Metals keep more of theirs.
+THREE.ShaderChunk.lights_fragment_end += `
+#if defined( STANDARD ) && defined( RE_IndirectSpecular )
+{
+  float soDirect = dot( reflectedLight.directDiffuse, vec3( 0.299, 0.587, 0.114 ) );
+  float soAlbedo = max( dot( material.diffuseColor, vec3( 0.299, 0.587, 0.114 ) ), 0.02 );
+  float so = mix( 0.33, 1.0, clamp( soDirect / soAlbedo / 1.8, 0.0, 1.0 ) );
+  reflectedLight.indirectSpecular *= mix( so, 1.0, clamp( metalnessFactor, 0.0, 1.0 ) * 0.55 );
+}
+#endif
+`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -17,8 +31,13 @@ const ARENA_R = 17.2;
 const STAND_TIERS = [[20.3, 5.0], [21.7, 6.2]];
 
 // ============================================================ renderer / scene
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// phones and tablets: touch controls, and a lighter start (lower resolution, smaller shadow map); the resolution then
+// adapts to the frame rate on every device (see `adaptResolution`)
+const TOUCH = matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0;
+const renderer = new THREE.WebGLRenderer({ antialias: !TOUCH, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
+const MAX_PR = Math.min(devicePixelRatio, TOUCH ? 1.5 : 2);
+let pixelRatio = MAX_PR;
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -31,8 +50,15 @@ scene.fog = new THREE.FogExp2(0x8e9296, 0.0058);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 400);
 camera.position.set(0, 4, 14);
 
+// three.js keeps the vertical field of view fixed, so a tall, narrow (portrait) screen would see only a sliver of the
+// arena: widen the vertical view until the horizontal one is at least ~64°
+function fitFov() {
+  const a = innerWidth / innerHeight;
+  camera.fov = a >= 1 ? 58 : Math.min(88, 2 * Math.atan(Math.tan(32 * Math.PI / 180) / a) * 180 / Math.PI);
+}
+fitFov(); camera.updateProjectionMatrix();
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  camera.aspect = innerWidth / innerHeight; fitFov(); camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
 });
@@ -275,7 +301,7 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffeccc, 2.75);
 sun.position.copy(SUN_DIR).multiplyScalar(60);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(TOUCH ? 1024 : 2048, TOUCH ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 140 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 scene.add(sun);
@@ -364,14 +390,29 @@ function terrainMesh(geo, maps, tint) {
   m.receiveShadow = true; scene.add(m); return m;
 }
 const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(z * 0.23 * s - 0.6) * 0.6 + Math.sin((x - z) * 0.61 * s) * 0.25 + Math.sin(x * 1.37 * s + z * 0.97 * s) * 0.15);
-const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 140, grains: 9000, strength: 3.2, contrast: 1.5, dark: [78, 60, 40], light: [150, 124, 92], repeat: 7 });
+// The arena floor: grey-brown packed earth, not yellow sand. Over it lie patches of grey gravel, worn tracks (a ring
+// trodden round the middle by fighters circling each other, and a path in from the gate), and soggy, mossy green patches
+// where grass still clings on, mostly out of the way near the stockade. One function, so the grass tufts can find them.
+function arenaPatches(x, z) {
+  const r = Math.hypot(x, z), a = Math.atan2(x, z);
+  const gravel = clamp((macro(x * 0.9 + 31, z * 0.9 - 7, 1.1) - 0.6) * 3.2, 0, 1);
+  const green = clamp((macro(x * 0.55 - 19, z * 0.55 + 23, 0.9) - 0.6) * 3.4, 0, 1) * clamp((r - 6) / 6, 0, 1);
+  const ring = Math.exp(-((r - 10.5 + 0.7 * Math.sin(a * 3 + 1) + 0.4 * Math.sin(a * 7)) ** 2) / 1.6);
+  const path = z < 0 ? Math.exp(-((x + 0.9 * Math.sin(z * 0.35)) ** 2) / 1.2) * clamp((-z - 2) / 4, 0, 1) : 0;
+  return { gravel, green: green * (1 - Math.max(ring, path)), track: Math.max(ring, path) };
+}
+const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 160, grains: 9000, strength: 3.2, contrast: 1.45, dark: [64, 59, 52], light: [134, 126, 114], repeat: 7 });
 const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
-  const m = macro(x, z, 1), r = Math.hypot(x, z), trodden = Math.exp(-r * r / 60) * 0.12;
-  const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.5;  // churned, darker mud
-  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.22;                                      // trodden filth along the wall
-  const v = (0.74 + m * 0.3 - trodden) * (1 - mud - grime);
-  return [v * 1.02, v * (1 - mud * 0.05), v * (0.94 - mud * 0.06)];
+  const m = macro(x, z, 1), r = Math.hypot(x, z), P0 = arenaPatches(x, z);
+  const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.45;  // churned, darker mud
+  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2;                                       // trodden filth along the wall
+  const v = (0.76 + m * 0.26) * (1 - mud - grime) * (1 - P0.track * 0.22);               // tracks: packed down, darker
+  let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
+  const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
+  const gn = P0.green * 0.85; c = c.map((k, i) => lerp(k, v * [0.46, 0.54, 0.32][i], gn));       // muddy green
+  return c;
 });
+sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't sheen across it
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
 const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
@@ -381,7 +422,7 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
 });
 // loose pebbles on the sand
 {
-  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), phys(0xffffff, 0.55, 0, { specularColor: 0xbcd2ff }), n);
+  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75, 0, { envMapIntensity: 0.5 }), n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.8, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.03, 0.085);
@@ -391,16 +432,68 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
   }
   peb.castShadow = peb.receiveShadow = true; scene.add(peb);
 }
-// grass tufts around the outside of the stockade
+// grass tufts around the outside of the stockade: each tuft is a clump of thin, curved, tapering blades (dark at the
+// root, sun-bleached at the tip) that sway in the wind. The sway is done in the vertex shader, so it costs nothing on
+// the CPU; the tufts skip the depth pre-pass, since the pre-pass would draw them unswayed.
+const grassWind = { value: 0 };
 {
-  const n = 900, tuft = new THREE.InstancedMesh(new THREE.ConeGeometry(0.12, 0.45, 4), std(0xffffff, 0.9), n);
+  const BLADES = 11, SEG = 3, pos = [], col = [], nor = [], idx = [];
+  for (let b = 0; b < BLADES; b++) {
+    const th = rand(0, 6.28), lean = rand(0.25, 0.9), h = rand(0.22, 0.58), w = rand(0.018, 0.03);
+    const r0 = rand(0, 0.07), ox = Math.cos(th) * r0, oz = Math.sin(th) * r0;
+    const dx = Math.cos(th), dz = Math.sin(th), px = -dz, pz = dx; // lean direction, and across the blade
+    const tipTone = rand(0.85, 1.15), dry = Math.random() < 0.25;
+    const base = pos.length / 3;
+    for (let s = 0; s <= SEG; s++) {
+      const t = s / SEG, y = h * t * (1 - 0.18 * t * lean), out = lean * h * t * t * 0.8, ww = w * (1 - t) + 0.002;
+      for (const side of [-1, 1]) {
+        pos.push(ox + dx * out + px * ww * side, y, oz + dz * out + pz * ww * side);
+        const k = (0.35 + 0.65 * t) * tipTone; // dark at the root, light at the tip
+        col.push(k * (dry ? 1.25 : 1), k * (dry ? 1.1 : 1), k * (dry ? 0.7 : 1));
+        const n = new V3(dx * 0.35, 1, dz * 0.35).normalize(); // lit like the ground it grows from, not like a card
+        nor.push(n.x, n.y, n.z);
+      }
+      if (s < SEG) { const a = base + s * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setIndex(idx);
+  const mat = std(0xffffff, 0.88, 0, { vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.35 });
+  mat.userData.noPrepass = true;
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWind = grassWind;
+    sh.vertexShader = 'uniform float uWind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 gw = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+      float gust = 0.6 + 0.4 * sin(uWind * 0.37 + gw.x * 0.05 + gw.z * 0.04);
+      float sway = (sin(uWind * 1.9 + gw.x * 0.45 + gw.z * 0.31) * 0.6 + sin(uWind * 3.7 + gw.z * 0.8) * 0.25) * gust;
+      float bend = transformed.y * transformed.y * 0.9;
+      transformed.x += sway * bend; transformed.z += sway * bend * 0.5; transformed.y -= abs(sway) * bend * 0.15;`);
+  };
+  const n = TOUCH ? 900 : 1700, tuft = new THREE.InstancedMesh(geo, mat, n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
-    const a = rand(0, 6.28), r = rand(19.6, 60), x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.6, 1.6);
-    d.position.set(x, groundH(x, z) + 0.18 * s, z); d.rotation.set(rand(-0.2, 0.2), rand(0, 3), rand(-0.2, 0.2)); d.scale.setScalar(s);
-    d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.17, 0.25), rand(0.25, 0.45), rand(0.13, 0.22)));
+    // thicker against the stockade, thinning out into the town
+    const a = rand(0, 6.28), r = 19.6 + Math.pow(Math.random(), 1.8) * 40, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.7, 1.5);
+    d.position.set(x, groundH(x, z) - 0.01, z); d.rotation.set(rand(-0.08, 0.08), rand(0, 6.28), rand(-0.08, 0.08)); d.scale.set(s, s * rand(0.8, 1.2), s);
+    d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.16, 0.24), rand(0.3, 0.5), rand(0.2, 0.32)));
   }
   tuft.receiveShadow = true; scene.add(tuft);
+  // sparse, short, darker tufts in the muddy green patches on the arena floor
+  const spots = [];
+  for (let i = 0; i < 6000 && spots.length < (TOUCH ? 220 : 420); i++) {
+    const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.6, x = Math.sin(a) * r, z = Math.cos(a) * r;
+    if (Math.random() < arenaPatches(x, z).green * 0.9) spots.push([x, z]);
+  }
+  const inner = new THREE.InstancedMesh(geo, mat, spots.length);
+  spots.forEach(([x, z], i) => {
+    const s = rand(0.35, 0.75);
+    d.position.set(x, groundH(x, z) - 0.005, z); d.rotation.set(0, rand(0, 6.28), 0); d.scale.set(s, s * rand(0.6, 1), s);
+    d.updateMatrix(); inner.setMatrixAt(i, d.matrix); inner.setColorAt(i, c.setHSL(rand(0.17, 0.23), rand(0.25, 0.4), rand(0.14, 0.22)));
+  });
+  inner.receiveShadow = true; scene.add(inner);
 }
 
 // ---- weathering: soot streaks from the top, damp creeping up from the bottom, blotches and grit
@@ -432,6 +525,7 @@ function weather(g, s, o = {}) {
 // a canvas colour map that doubles as its own bump map — dark seams and cracks read as recessed
 // the faint, cold specular tint that stone, slate and wet surfaces glint with in the sun
 const COLD_SPEC = new THREE.Color(0xbcd2ff);
+const STONE_SPEC = new THREE.Color(0xdfe5ec); // only a hint of cold in dry stone's sheen; a blue cast reads as plastic
 function surfMat(tex, rough = 0.92, bump = 2, metal = 0, extra = {}) {
   return std(0xffffff, rough, metal, { map: tex, bumpMap: tex, bumpScale: bump, ...extra });
 }
@@ -547,14 +641,14 @@ const stoneMaps = (() => {
   for (let i = 0; i < C.length; i += 4) {
     if (Hd[i] < 60) continue; // mortar stays dead matte
     const lum = (C[i] * 0.3 + C[i + 1] * 0.59 + C[i + 2] * 0.11) / 255, moss = C[i + 1] > C[i] + 3 ? 0.3 : 0;
-    const r = clamp(R.data[i] / 255 - (0.26 - lum) * 1.4 + moss + (Math.random() - 0.5) * 0.08, 0.18, 1) * 255;
+    const r = clamp(R.data[i] / 255 - (0.26 - lum) * 1.4 + moss + (Math.random() - 0.5) * 0.08, 0.34, 1) * 255; // damp, not glassy
     R.data[i] = R.data[i + 1] = R.data[i + 2] = r;
   }
   rg.putImageData(R, 0, 0);
   const map = dataTex(cc); map.colorSpace = THREE.SRGBColorSpace;
   return { map, normalMap: dataTex(heightToNormal(Hd, s, 7)), roughnessMap: dataTex(rc) };
 })();
-const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: COLD_SPEC, specularIntensity: 1 });
+const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: STONE_SPEC, specularIntensity: 0.4, envMapIntensity: 0.45 });
 stoneM.userData.world = 3.5;
 
 // worn steel: brushed grain, fine bright scratches, dull smudges and pits — a roughness texture so reflections
@@ -859,8 +953,8 @@ function buildTown() {
   }, '#2a2214');
   // tw/course: tile size (m); lift: how far each course's butt stands proud; jit: per-tile wobble; sag: belly between eave and ridge
   const ROOF = {
-    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: COLD_SPEC, specularIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
-    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: COLD_SPEC, specularIntensity: 1, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
+    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: STONE_SPEC, specularIntensity: 0.35, envMapIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
+    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: STONE_SPEC, specularIntensity: 0.5, envMapIntensity: 0.65, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
     shingle: { mat: surfMat(shingleTex, 0.95, 2, 0, { side: THREE.DoubleSide }), tw: 0.24, course: 0.24, lift: 0.045, jit: 0.6, sag: 0.12, ridge: 0.1 },
     thatch:  { mat: surfMat(thatchTex, 1, 3, 0, { side: THREE.DoubleSide }), tw: 0.5, course: 0.42, lift: 0.13, jit: 0.3, sag: 0.18, ridge: 0.3, bulge: true },
   };
@@ -1830,13 +1924,13 @@ const SFX = {
 function buildHero() {
   const M = {
     skin: phys(0xc4906f, 0.6, 0, { sheen: 0.3, sheenColor: 0xffd8c0 }),
-    leather: phys(0x4b3020, 0.55, 0, { clearcoat: 0.55, clearcoatRoughness: 0.3 }),
+    leather: std(0x4b3020, 0.8),
     cloth: phys(0x37362c, 0.85, 0, { sheen: 0.7, sheenColor: 0x9fb4cc, sheenRoughness: 0.45 }),
     sash: phys(0x8c2a1c, 0.8, 0, { sheen: 0.5, sheenColor: 0xd0c0c8 }),
-    boot: phys(0x271a10, 0.45, 0, { clearcoat: 0.6, clearcoatRoughness: 0.25 }), hair: std(0x2a1b12, 1),
-    metal: phys(0xd8e0ea, 0.12, 1.0, { clearcoat: 1, clearcoatRoughness: 0.06, emissive: 0x000000 }),
-    steel: phys(0xb4bfcc, 0.2, 1.0, { clearcoat: 0.9, clearcoatRoughness: 0.12 }),
-    iron: phys(0x5c6168, 0.3, 0.9, { clearcoat: 0.6, clearcoatRoughness: 0.2 }), eye: phys(0x111111, 0.1, 0, { clearcoat: 1 }),
+    boot: std(0x271a10, 0.75), hair: std(0x2a1b12, 1),
+    metal: std(0xd8e0ea, 0.3, 1.0, { roughnessMap: metalRough, emissive: 0x000000 }),
+    steel: std(0xa4adb8, 0.85, 0.85, { roughnessMap: metalRough }),
+    iron: std(0x5c6168, 1.1, 0.8, { roughnessMap: metalRough }), eye: phys(0x111111, 0.1, 0, { clearcoat: 1 }),
   };
   const root = new THREE.Group(); root.rotation.order = 'YXZ';
   const j = {};
@@ -1958,17 +2052,19 @@ function buildHeroGLB(tpl) {
   const vc = { vertexColors: true };
   const M = {
     // worn, matte finishes: skin with a soft sheen, dry leather, dull brushed steel; only the blade keeps an edge of shine
-    skin: phys(0x9a6e55, 0.74, 0, { ...vc, sheen: 0.25, sheenColor: 0xd8a890, sheenRoughness: 0.6 }),
+    skin: phys(0x9a6e55, 0.8, 0, { ...vc, sheen: 0.1, sheenColor: 0xd8a890, sheenRoughness: 0.7, specularIntensity: 0.5, envMapIntensity: 0.5 }),
     leather: std(0x50301d, 0.82, 0, vc),
     cloth: std(0x3d3c31, 0.96, 0, { ...vc, side: THREE.DoubleSide }),
     sash: std(0x7a2418, 0.92, 0, { ...vc, side: THREE.DoubleSide }),
     boot: std(0x2b1d12, 0.78, 0, vc),
     hair: std(0x2a1b12, 1, 0, vc),
     // metals: worn and dull underneath, with a thin clear layer that throws a small, crisp, cold highlight
-    steel: phys(0x868b92, 1.05, 0.75, { ...vc, roughnessMap: metalRough, clearcoat: 0.35, clearcoatRoughness: 0.5, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.25, envMapIntensity: 0.6 }),
-    iron: phys(0x46474a, 1.35, 0.65, { ...vc, roughnessMap: metalRough, clearcoat: 0.18, clearcoatRoughness: 0.7, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.3, envMapIntensity: 0.45 }),
-    mail: phys(0x5f6266, 1.3, 0.7, { ...vc, roughnessMap: metalRough, side: THREE.DoubleSide, clearcoat: 0.15, clearcoatRoughness: 0.8, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.45 }),
-    metal: phys(0xb8c0c8, 0.55, 1.0, { ...vc, roughnessMap: metalRough, emissive: 0x000000, clearcoat: 0.4, clearcoatRoughness: 0.28, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.8 }),
+    // No clearcoat: worn steel has no lacquer over it, and a clear layer is what made the armour read as plastic.
+    // The roughness texture breaks the reflections up instead (scratches and burnish glint, smudges stay dull).
+    steel: std(0x868b92, 0.88, 0.8, { ...vc, roughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.25, envMapIntensity: 0.55 }),
+    iron: std(0x46474a, 1.35, 0.7, { ...vc, roughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.3, envMapIntensity: 0.4 }),
+    mail: std(0x5f6266, 1.4, 0.7, { ...vc, roughnessMap: metalRough, side: THREE.DoubleSide, envMapIntensity: 0.4 }),
+    metal: std(0xb8c0c8, 0.6, 1.0, { ...vc, roughnessMap: metalRough, emissive: 0x000000, envMapIntensity: 0.75 }),
     eye: std(0xb8b0a2, 0.45, 0, vc),
   };
   const model = tpl.clone(true);
@@ -2332,7 +2428,10 @@ class Beast {
     R.root.rotation.y = this.yaw;
     if (st === 'dead') { R.root.rotation.z = damp(R.root.rotation.z, this.dieRoll, 4, dt); R.root.position.y = groundH(this.pos.x, this.pos.z) + 0.55 * this.s; }
     const f = this.flash > 0 ? this.flash / 0.12 : 0;
-    for (const m of R.flashMats) m.emissive.setRGB(0.6 * f, 0.08 * f, 0.04 * f);
+    // focus highlight (as in medieval-sim): the locked beast glows a soft, breathing gold; the one you'd lock next, fainter
+    this.hlv = damp(this.hlv || 0, this.hl || 0, 10, dt);
+    const h = this.hlv * (0.7 + 0.3 * Math.sin(time * 6));
+    for (const m of R.flashMats) m.emissive.setRGB(0.6 * f + 0.24 * h, 0.08 * f + 0.15 * h, 0.04 * f + 0.05 * h);
     const tele = st === 'lungeWind' || st === 'peckWind' ? 1 : 0;
     R.M.eye.emissiveIntensity = damp(R.M.eye.emissiveIntensity, st === 'dead' ? 0 : 2.4 + tele * 5, 10, dt);
   }
@@ -2362,7 +2461,7 @@ function acquireLock() {
   return best;
 }
 function currentTarget() {
-  if (!P.drawn || !lockOn || P.state === 'dead') { lockTarget = null; return null; }
+  if (!P.drawn || !(lockOn || actionHeld() || touch.portrait) || P.state === 'dead') { lockTarget = null; return null; }
   if (!lockable(lockTarget)) lockTarget = acquireLock();
   return lockTarget;
 }
@@ -2444,7 +2543,7 @@ function startAttack(step, lf, rt, target) {
   if (step < 3) { if (lf) type = 'rl'; else if (rt) type = 'lr'; }
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
-  P.swingId++;
+  P.swingId++; P.queued = null; P.chainGrace = 0;
   P.hitSet.clear();
   const sp = Math.max(0.72, Math.pow(0.93, step)) * (sw.slow || 1);
   P.times = { w: 0.21 * sp * (sw.wMul || 1), a: 0.11 * sp * (sw.aMul || 1), r: 0.42 * sp };
@@ -2460,14 +2559,20 @@ function updatePlayer(dt) {
   P.iframes = Math.max(0, P.iframes - dt); P.stDelay -= dt;
   P.comboT -= dt; if (P.comboT <= 0) P.combo = 0;
   flickCd -= dt; flickX *= Math.exp(-10 * dt); // a flick has to be quick, slow drift doesn't add up
-  const fw = keys.KeyW || keys.ArrowUp, bw = keys.KeyS || keys.ArrowDown;
-  const lf = keys.KeyA || keys.ArrowLeft, rt = keys.KeyD || keys.ArrowRight;
-  const sl = keys.KeyQ, sr = keys.KeyE;
-  const wantAttack = pressed.has('Attack') || pressed.has('KeyJ');
-  const wantBlock = mouseR || keys.KeyK;
-  const wantDraw = pressed.has('KeyF') || pressed.has('Digit1');
+  P.chainGrace = (P.chainGrace || 0) - dt;
+  const js = touch.stick; // the on-screen joystick (phones), x/y in -1..1, y < 0 = forward
+  // action key (left mouse or E, as in medieval-sim): while it is held with the sword out, W A D strike forward / left /
+  // right and S guards, instead of moving
+  const act = actionHeld() && (P.drawn || P.state === 'draw');
+  const kf = !act && (keys.KeyW || keys.ArrowUp), kb = !act && (keys.KeyS || keys.ArrowDown);
+  const kl = !act && (keys.KeyA || keys.ArrowLeft), kr = !act && (keys.KeyD || keys.ArrowRight);
+  const fw = kf || js.y < -0.5, bw = kb || js.y > 0.5, lf = kl || js.x < -0.5, rt = kr || js.x > 0.5;
+  const wantAttack = pressed.has('Attack') || pressed.has('KeyJ') || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR');
+  const swL = pressed.has('AtkL') || (lf && !pressed.has('AtkF') && !pressed.has('AtkR')), swR = pressed.has('AtkR') || (rt && !pressed.has('AtkF') && !pressed.has('AtkL'));
+  const wantBlock = mouseR || keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
+  const wantDraw = pressed.has('KeyF') || pressed.has('Digit1') || pressed.has('Draw');
   const wantDodge = pressed.has('Space');
-  const sprint = keys.ShiftLeft || keys.ShiftRight;
+  const sprint = keys.ShiftLeft || keys.ShiftRight || Math.hypot(js.x, js.y) > 0.95;
   const canAct = game.state === 'play' || game.state === 'between';
   let tp = null, k = 14;
   const fwdV = new V3(Math.sin(P.yaw), 0, Math.cos(P.yaw));
@@ -2486,13 +2591,23 @@ function updatePlayer(dt) {
     case 'block': {
       if (!canAct) { tp = P.drawn ? POSE.stance : POSE.relaxed; break; }
       if (wantDraw) { startDraw(); break; }
-      if (wantAttack) { if (!P.drawn) { startDraw(); break; } if (P.st >= 6) { startAttack(0, lf, rt, target); break; } }
+      if (wantAttack) {
+        if (!P.drawn) { startDraw(); break; }
+        // a strike right after the last one finished still chains (a forgiving late window)
+        const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
+        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
+      }
       if (wantDodge && P.drawn && P.st >= 18) { startDodge(); break; }
       P.state = wantBlock && P.drawn ? 'block' : 'idle';
       let turn = 0, f = 0, s = 0;
-      if (fw) f += 1; if (bw) f -= 0.65;
-      if (target) { if (lf) s -= 1; if (rt) s += 1; } else { if (lf) turn += 1; if (rt) turn -= 1; }
-      if (sl) s -= 1; if (sr) s += 1;
+      if (js.active) { // analog: how far the stick is pushed sets the speed
+        const dz = v => (Math.abs(v) < 0.15 ? 0 : v);
+        f = -dz(js.y) * (js.y > 0 ? 0.65 : 1);
+        if (target) s = dz(js.x); else turn = -dz(js.x) * 0.8;
+      } else {
+        if (fw) f += 1; if (bw) f -= 0.65;
+        if (target) { if (lf) s -= 1; if (rt) s += 1; } else { if (lf) turn += 1; if (rt) turn -= 1; }
+      }
       P.yaw += turn * 2.9 * dt;
       if (target) P.yaw = dampAng(P.yaw, yawTo(P.pos, target.pos), 9, dt);
       let speed = P.drawn ? (sprint ? 4.8 : 3.5) : (sprint ? 6.8 : 4.4);
@@ -2517,14 +2632,19 @@ function updatePlayer(dt) {
     }
     case 'attack': {
       P.t += dt;
-      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a + 0.02;
+      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a;
+      // Chaining is forgiving: a press during the cut itself is remembered and fires the moment the window opens; only
+      // mashing during the wind-up breaks the chain. The window runs to the end of the recovery, plus a short grace
+      // after it (see `chainGrace` in idle).
       if (wantAttack && P.step < COMBO.length - 1) {
-        if (P.t >= winStart && !P.failed && P.st >= 4) {
-          const late = (P.t - winStart) / (tot - winStart);
-          popText(hero.swordTip.getWorldPosition(new V3()), late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
-          startAttack(P.step + 1, lf, rt, target);
-          break;
-        } else if (P.t < winStart) P.failed = true;
+        if (P.t < w * 0.8) P.failed = true;
+        else if (!P.failed) P.queued = { l: swL, r: swR, at: P.t };
+      }
+      if (P.queued && !P.failed && P.t >= winStart && P.st >= 4) {
+        const q = P.queued, late = (P.t - winStart) / (tot - winStart);
+        popText(hero.swordTip.getWorldPosition(new V3()), q.at < winStart || late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
+        startAttack(P.step + 1, q.l, q.r, target);
+        break;
       }
       if (wantDodge && P.t > w + a && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
       if (!P.swungSound && P.t >= w * 0.7) { SFX.swing(P.step); P.swungSound = true; }
@@ -2549,10 +2669,10 @@ function updatePlayer(dt) {
       tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
       if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
       k = 30;
-      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart;
+      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.08;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
-      if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); }
+      if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); if (!P.failed) { P.chainGrace = 0.3; P.lastStep = P.step; } }
       break;
     }
     case 'dodge': {
@@ -2751,6 +2871,7 @@ function showOverlay(html) {
 }
 function begin() {
   initAudio();
+  goFullscreen();
   $('overlay').classList.add('hidden');
   resetGame();
   lockPointer();
@@ -2770,7 +2891,7 @@ const canPause = () => (game.state === 'play' || game.state === 'between') && $(
 function pauseGame() {
   if (paused || !canPause()) return;
   paused = true;
-  for (const k in keys) keys[k] = false; mouseR = false;
+  for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; touch.reset?.();
   $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
   $('optBright').value = settings.bright; $('optWeather').value = settings.weather;
   $('pause').classList.remove('hidden');
@@ -2805,9 +2926,34 @@ document.addEventListener('visibilitychange', () => {
 
 // ============================================================ input
 const keys = {}; const pressed = new Set(); let mouseR = false;
+// The action key (medieval-sim's modern scheme): left mouse or E. Holding it locks on to the beast in front; with the
+// sword out, W / A / D then strike forward / left / right (press again to chain) and S guards. Pressing it while a
+// direction is already held strikes at once. A quick click on its own also strikes forward.
+let mouseL = false, actT = 0, actUsed = false;
+const actionHeld = () => mouseL || !!keys.KeyE;
+const ACT_DIRS = { KeyW: 'AtkF', ArrowUp: 'AtkF', KeyA: 'AtkL', ArrowLeft: 'AtkL', KeyD: 'AtkR', ArrowRight: 'AtkR' };
+function actionPress() {
+  if (actionHeld()) return; // the other action input is already down
+  actT = performance.now(); actUsed = false;
+  const held = Object.keys(ACT_DIRS).find(k => keys[k]);
+  if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
+}
+function actionRelease() {
+  if (actionHeld()) return;
+  if (!actUsed && performance.now() - actT < 250 && !(keys.KeyS || keys.ArrowDown)) pressed.add('Attack');
+}
+// Ctrl draws the sword, and browsers never let a page block Ctrl+W: ask before the tab closes mid-fight
+addEventListener('beforeunload', e => { if (game.state === 'play' || game.state === 'between') { e.preventDefault(); e.returnValue = ''; } });
 addEventListener('keydown', e => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  if (!keys[e.code]) pressed.add(e.code);
+  if (e.ctrlKey && game.state !== 'title' && !paused) e.preventDefault(); // Ctrl+S, Ctrl+D… (Ctrl+W can't be stopped)
+  if (!keys[e.code]) {
+    pressed.add(e.code);
+    if (e.code === 'KeyE' && !paused) actionPress();
+    if (ACT_DIRS[e.code] && actionHeld() && (P.drawn || P.state === 'draw')) { pressed.add(ACT_DIRS[e.code]); actUsed = true; }
+    if (e.code === 'KeyS' && actionHeld()) actUsed = true;
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') pressed.add('Draw');
+  }
   keys[e.code] = true;
   if (e.code === 'Escape') { if (paused) resumeGame(); else pauseGame(); return; }
   if (paused) return;
@@ -2816,28 +2962,32 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : settings.sound;
   if (e.code === 'KeyN') Music.toggle();
 });
-addEventListener('keyup', e => { keys[e.code] = false; });
-addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; });
+addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'KeyE') actionRelease(); });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; });
 renderer.domElement.addEventListener('mousedown', e => {
   if (game.state === 'title' || paused) return;
   if (document.pointerLockElement !== renderer.domElement) lockPointer();
-  if (e.button === 0) pressed.add('Attack');
+  if (e.button === 0) { actionPress(); mouseL = true; }
   if (e.button === 2) mouseR = true;
   if (e.button === 1) { lockOn = !lockOn; e.preventDefault(); }
 });
-addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; });
+addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; if (e.button === 0 && mouseL) { mouseL = false; actionRelease(); } });
 addEventListener('contextmenu', e => e.preventDefault());
 let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8, lookBack = false;
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
   const mx = e.movementX, my = e.movementY;
   if (Math.abs(mx) > 300 || Math.abs(my) > 300) return; // Chrome on Windows sometimes reports huge bogus jumps under pointer lock
+  look(mx, my);
+});
+// mouse (and the touch look-pad): turns the hero and tilts the camera; locked on, a quick sideways flick switches beast
+function look(mx, my) {
   if (currentTarget()) { // locked on: the mouse doesn't turn the hero, but a quick flick switches target
     flickX += mx * settings.sens;
     if (Math.abs(flickX) > 140 && flickCd <= 0) { if (switchTarget(Math.sign(flickX))) flickCd = 0.35; flickX = 0; }
   } else if (!isDown() && P.state !== 'attack') P.yaw -= mx * 0.0024 * settings.sens;
   camPitch = clamp(camPitch + my * 0.0018 * settings.sens, -0.75, 0.85);
-});
+}
 // raw (unaccelerated) mouse deltas where the browser supports them, so turning doesn't depend on OS mouse acceleration
 function lockPointer() {
   const el = renderer.domElement;
@@ -2845,6 +2995,114 @@ function lockPointer() {
   catch (e) { try { el.requestPointerLock?.(); } catch (e2) { /* not allowed right now */ } }
 }
 addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) * 0.4, 2.8, 9); }, { passive: true });
+
+// ---- touch controls: a floating joystick under the left thumb, a look-pad for the right thumb (drag turns the hero and
+// tilts the camera; locked on, a quick sideways flick switches beast), and buttons for strike, parry, step back, draw,
+// lock-on and pause. They show on phones and tablets, and on any device the moment it is touched.
+//
+// Held upright (portrait) the controls are simplified for thumbs: the joystick lives in the lower-left quarter, and the
+// rest of the screen is one gesture area. Tap = strike (tap again as the blade glints to chain), touch and hold = guard
+// (the parry), swipe left / right = a side cut, swipe down = step back (and get up after a knock-down). The sword draws
+// itself on the first strike and lock-on is always on; a small button cycles the target.
+const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: false, portrait: false };
+(function touchControls() {
+  const pad = $('tpad'), stick = $('stick'), knob = $('knob'), ring = $('gest'), R = 55;
+  let stickId = null, lookId = null, sx = 0, sy = 0, lx = 0, ly = 0;
+  let gId = null, gx = 0, gy = 0, gt = 0, gHold = null, gDone = false, gBlock = false;
+  function enable() { if (touch.enabled) return; touch.enabled = true; document.body.classList.add('touch'); orient(); }
+  function orient() {
+    touch.portrait = touch.enabled && innerHeight > innerWidth;
+    document.body.classList.toggle('portrait', touch.portrait);
+  }
+  addEventListener('resize', orient);
+  if (TOUCH) enable();
+  addEventListener('touchstart', enable, { passive: true, capture: true });
+  const playing = () => !paused && game.state !== 'title';
+  const buzz = ms => { try { navigator.vibrate?.(ms); } catch (e) { /* no haptics */ } };
+  // tap vs hold is judged by the touch events' own timestamps, so a slow frame on the phone can't turn a tap into a guard
+  function gestStart(t, ts) {
+    gId = t.identifier; gx = t.clientX; gy = t.clientY; gt = ts; gDone = false; gBlock = false;
+    ring.style.left = gx + 'px'; ring.style.top = gy + 'px'; ring.className = 'on';
+    clearTimeout(gHold);
+    gHold = setTimeout(() => { // still pressing, hardly moved: guard
+      if (gId === null || gDone || !playing()) return;
+      gBlock = true; touch.parry = true; ring.className = 'on guard'; buzz(12);
+    }, 180);
+  }
+  function gestMove(t) {
+    const dx = t.clientX - gx, dy = t.clientY - gy;
+    if (gDone || gBlock || Math.hypot(dx, dy) < 38) return;
+    gDone = true; clearTimeout(gHold); ring.className = 'on swipe';
+    if (!playing()) return;
+    if (Math.abs(dx) > Math.abs(dy)) pressed.add(dx < 0 ? 'AtkL' : 'AtkR'); // side cut
+    else if (dy > 0) pressed.add('Space');                                 // step back / get up
+    else pressed.add('Attack');                                            // swipe up: a strike, like a tap
+  }
+  function gestEnd(ts) {
+    clearTimeout(gHold);
+    if (gBlock) touch.parry = false;
+    if (!gDone && (!gBlock || ts - gt < 180) && playing()) pressed.add('Attack'); // tap
+    gId = null; ring.className = '';
+  }
+  pad.addEventListener('touchstart', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      const stickZone = touch.portrait ? t.clientX < innerWidth * 0.5 && t.clientY > innerHeight * 0.5 : t.clientX < innerWidth * 0.45;
+      if (touch.portrait && !stickZone) { if (gId === null) gestStart(t, e.timeStamp); continue; }
+      if (stickZone && stickId === null) {
+        stickId = t.identifier; sx = t.clientX; sy = t.clientY;
+        stick.style.left = sx + 'px'; stick.style.top = sy + 'px'; stick.classList.add('on');
+        knob.style.transform = ''; touch.stick.active = true; touch.stick.x = touch.stick.y = 0;
+      } else if (lookId === null) { lookId = t.identifier; lx = t.clientX; ly = t.clientY; }
+    }
+  }, { passive: false });
+  pad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) {
+        let dx = t.clientX - sx, dy = t.clientY - sy; const l = Math.hypot(dx, dy);
+        if (l > R) { dx *= R / l; dy *= R / l; }
+        knob.style.transform = `translate(${dx}px,${dy}px)`;
+        touch.stick.x = dx / R; touch.stick.y = dy / R;
+      } else if (t.identifier === lookId) {
+        if (playing()) look((t.clientX - lx) * 2.2, (t.clientY - ly) * 1.6);
+        lx = t.clientX; ly = t.clientY;
+      } else if (t.identifier === gId) gestMove(t);
+    }
+  }, { passive: false });
+  const end = e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) { stickId = null; stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); }
+      if (t.identifier === lookId) lookId = null;
+      if (t.identifier === gId) gestEnd(e.timeStamp);
+    }
+  };
+  pad.addEventListener('touchend', end); pad.addEventListener('touchcancel', end);
+  // buttons: tap actions go through the same `pressed` set as the keyboard; parry is held
+  const btn = (id, down, up) => {
+    const el = $(id);
+    el.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); el.classList.add('down'); if (playing() || id === 'bPause') down(); }, { passive: false });
+    const rel = e => { e.preventDefault(); el.classList.remove('down'); up?.(); };
+    el.addEventListener('touchend', rel); el.addEventListener('touchcancel', rel);
+  };
+  btn('bAtk', () => pressed.add('Attack'));
+  btn('bDodge', () => pressed.add('Space'));
+  btn('bDraw', () => pressed.add('KeyF'));
+  btn('bParry', () => { touch.parry = true; }, () => { touch.parry = false; });
+  btn('bLock', () => { lockOn = !lockOn; saveSettings(); });
+  btn('bPause', () => { if (paused) resumeGame(); else pauseGame(); });
+  btn('bTarget', () => { if (!switchTarget(1)) switchTarget(-1); });
+  touch.reset = () => {
+    stickId = lookId = gId = null; clearTimeout(gHold); ring.className = '';
+    stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); touch.parry = false;
+  };
+})();
+// on a phone, going full screen gives the arena the whole display (either way up)
+function goFullscreen() {
+  if (!touch.enabled || document.fullscreenElement) return;
+  const el = document.documentElement;
+  try { el.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => {}); } catch (e) { /* not allowed */ }
+}
 
 // ============================================================ camera / hud / pops
 const pops = [];
@@ -2890,23 +3148,73 @@ function updateCamera(dt) {
   camera.position.lerp(cp, 1 - Math.exp(-14 * dt));
   if (shake > 0) { camera.position.add(new V3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(shake * 0.12)); shake = Math.max(0, shake - dt * 2.2); }
   camera.lookAt(camLook);
+  if (window.__dbgCam) { camera.position.copy(window.__dbgCam.pos); camera.lookAt(window.__dbgCam.target); } // debug: a fixed view
 }
+// Gothic-style bars, drawn here rather than taken from Gothic: a frame of dark, worn iron with tapered, riveted ends
+// and a sunken channel, and fills of grainy, bevelled colour like Gothic's bar textures. The frame is a CSS
+// border-image (the ends keep their shape at any width), and the fills are cut off by clip-path instead of squeezed,
+// so their grain doesn't smear as the bar drops.
+(function barSkins() {
+  const cv = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; };
+  const W = 256, H = 44, [fc, f] = cv(W, H);
+  const shape = () => { f.beginPath(); f.moveTo(2, 22); f.lineTo(20, 3); f.lineTo(W - 20, 3); f.lineTo(W - 2, 22); f.lineTo(W - 20, 41); f.lineTo(20, 41); f.closePath(); };
+  shape(); f.save(); f.clip();
+  const mg = f.createLinearGradient(0, 3, 0, 41);
+  mg.addColorStop(0, '#9b9384'); mg.addColorStop(0.18, '#6d665a'); mg.addColorStop(0.55, '#47413a'); mg.addColorStop(1, '#221d18');
+  f.fillStyle = mg; f.fillRect(0, 0, W, H);
+  for (let i = 0; i < 900; i++) { f.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,240,220'},${rand(0.04, 0.16)})`; f.fillRect(rand(0, W), rand(0, H), rand(1, 3), rand(1, 2)); } // pitting
+  for (let i = 0; i < 26; i++) { f.strokeStyle = `rgba(20,14,10,${rand(0.15, 0.4)})`; f.lineWidth = rand(0.5, 1.2); const x = rand(0, W), y = rand(3, 41); f.beginPath(); f.moveTo(x, y); f.lineTo(x + rand(-14, 14), y + rand(-2, 2)); f.stroke(); } // scratches
+  for (let i = 0; i < 10; i++) { const x = rand(0, W), gr = f.createRadialGradient(x, 30, 0, x, 30, rand(6, 16)); gr.addColorStop(0, 'rgba(110,52,22,.35)'); gr.addColorStop(1, 'rgba(110,52,22,0)'); f.fillStyle = gr; f.fillRect(x - 16, 14, 32, 30); } // rust
+  // the sunken channel the fill sits in
+  f.fillStyle = '#0d0806'; f.fillRect(24, 10, W - 48, 24);
+  const ch = f.createLinearGradient(0, 10, 0, 34); ch.addColorStop(0, 'rgba(0,0,0,.85)'); ch.addColorStop(0.3, 'rgba(0,0,0,0)'); ch.addColorStop(1, 'rgba(255,230,190,.08)');
+  f.fillStyle = ch; f.fillRect(24, 10, W - 48, 24);
+  f.restore();
+  // bevels: a lit upper edge, a dark outline, and the lip around the channel
+  shape(); f.strokeStyle = '#0b0705'; f.lineWidth = 2.5; f.stroke();
+  f.strokeStyle = 'rgba(235,225,200,.45)'; f.lineWidth = 1; f.beginPath(); f.moveTo(21, 5); f.lineTo(W - 21, 5); f.stroke();
+  f.strokeStyle = 'rgba(0,0,0,.9)'; f.strokeRect(24.5, 10.5, W - 49, 23);
+  f.strokeStyle = 'rgba(220,205,170,.25)'; f.beginPath(); f.moveTo(24, 34.5); f.lineTo(W - 24, 34.5); f.stroke();
+  for (const x of [12, W - 12]) { // rivets on the ends
+    const rg = f.createRadialGradient(x - 1.2, 20.5, 0.5, x, 22, 4.5); rg.addColorStop(0, '#d9d0bd'); rg.addColorStop(0.5, '#6d665a'); rg.addColorStop(1, '#1a1511');
+    f.fillStyle = rg; f.beginPath(); f.arc(x, 22, 4.2, 0, 7); f.fill();
+  }
+  const fill = (top, mid, bot) => {
+    const [c, x] = cv(128, 24);
+    const gr = x.createLinearGradient(0, 0, 0, 24);
+    gr.addColorStop(0, top); gr.addColorStop(0.32, mid); gr.addColorStop(1, bot);
+    x.fillStyle = gr; x.fillRect(0, 0, 128, 24);
+    for (let i = 0; i < 40; i++) { x.fillStyle = `rgba(0,0,0,${rand(0.05, 0.18)})`; x.fillRect(0, rand(0, 24), 128, rand(0.5, 1.5)); } // fibrous streaks
+    for (let i = 0; i < 700; i++) { x.fillStyle = `rgba(${Math.random() < 0.55 ? '0,0,0' : '255,235,210'},${rand(0.04, 0.16)})`; x.fillRect(rand(0, 128), rand(0, 24), rand(1, 2.5), 1); } // grain
+    x.fillStyle = 'rgba(255,240,220,.28)'; x.fillRect(0, 4, 128, 1.5); // the glossy bead along the top
+    x.fillStyle = 'rgba(0,0,0,.35)'; x.fillRect(0, 22, 128, 2);
+    return `url(${c.toDataURL()})`;
+  };
+  const css = document.documentElement.style;
+  css.setProperty('--bar-frame', `url(${fc.toDataURL()})`);
+  css.setProperty('--fill-hp', fill('#f0745c', '#c0281b', '#4e0905'));
+  css.setProperty('--fill-st', fill('#ece0a0', '#ad9338', '#3e3210'));
+  css.setProperty('--fill-foe', fill('#e9875a', '#a8381a', '#3d0f05'));
+})();
+const setBar = (el, v) => { el.style.clipPath = `inset(0 ${(100 - clamp(v, 0, 1) * 100).toFixed(2)}% 0 0)`; };
 function updateHUD(dt) {
   P.ghostHp = damp(P.ghostHp, P.hp, 3, dt);
-  $('php').querySelector('.fill').style.transform = `scaleX(${P.hp / P.maxHp})`;
-  $('php').querySelector('.ghost').style.transform = `scaleX(${P.ghostHp / P.maxHp})`;
-  $('pst').querySelector('.fill').style.transform = `scaleX(${Math.max(0, P.st) / P.maxSt})`;
-  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : 'UNARMED — PRESS F';
+  setBar($('php').querySelector('.fill'), P.hp / P.maxHp);
+  setBar($('php').querySelector('.ghost'), P.ghostHp / P.maxHp);
+  setBar($('pst').querySelector('.fill'), P.st / P.maxSt);
+  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : (touch.portrait ? 'UNARMED — TAP TO STRIKE' : touch.enabled ? 'UNARMED — TAP DRAW' : 'UNARMED — PRESS CTRL');
   const tgt = currentTarget() || beasts.find(e => !e.dead && e.state !== 'wait');
   const eb = $('ebox');
   if (tgt && game.state !== 'title') {
     eb.style.opacity = 1;
     tgt.ghostHp = damp(tgt.ghostHp, tgt.hp, 3, dt);
-    $('ebar').querySelector('.fill').style.transform = `scaleX(${Math.max(0, tgt.hp) / tgt.maxHp})`;
-    $('ebar').querySelector('.ghost').style.transform = `scaleX(${Math.max(0, tgt.ghostHp) / tgt.maxHp})`;
+    setBar($('ebar').querySelector('.fill'), tgt.hp / tgt.maxHp);
+    setBar($('ebar').querySelector('.ghost'), tgt.ghostHp / tgt.maxHp);
     $('ename').textContent = tgt.name;
   } else eb.style.opacity = 0;
   // a small gold chevron over the locked beast's head
+  if (touch.enabled) $('touch').style.visibility = game.state === 'title' || !$('overlay').classList.contains('hidden') ? 'hidden' : '';
+  if (touch.enabled) { $('bLock').classList.toggle('lit', lockOn); $('bDraw').textContent = P.drawn ? 'SHEATHE' : 'DRAW'; }
   const lm = $('lockmark'), lt = currentTarget();
   if (lt && game.state !== 'title') {
     const v = tmpV2.set(lt.pos.x, groundH(lt.pos.x, lt.pos.z) + 2.6 * lt.s, lt.pos.z).project(camera);
@@ -2950,7 +3258,7 @@ function drawFrame() {
   scene.traverse(o => {
     if (!o.isMesh && !o.isPoints && !o.isLine) return;
     const m = o.material;
-    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
+    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest && !m.userData.noPrepass) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
     else o.layers.set(1); // transparent things, particles, lightning, sky, barrier: main pass only
   });
   camera.layers.set(0);
@@ -2960,12 +3268,30 @@ function drawFrame() {
   renderer.shadowMap.needsUpdate = true;
   renderer.autoClear = false; renderer.render(scene, camera); renderer.autoClear = true;
 }
+// Dynamic resolution: almost all the frame time is pixel shading, so when the frame rate sags (a phone, a weak laptop)
+// the render resolution steps down, and it steps back up when there is headroom. Judged over 2-second windows.
+let prevNow = performance.now(), frWin = 0, frN = 0, frCool = 3;
+function adaptResolution(fdt) {
+  if (!(fdt > 0) || fdt > 0.5) return; // tab switches, hitches
+  frWin += fdt; frN++; frCool -= fdt;
+  if (frWin < 2) return;
+  const fps = frN / frWin; frWin = 0; frN = 0;
+  if (frCool > 0) return;
+  let pr = pixelRatio;
+  if (fps < 40 && pr > 0.6) pr = Math.max(0.6, pr - (fps < 25 ? 0.25 : 0.125));
+  else if (fps > 57 && pr < MAX_PR) pr = Math.min(MAX_PR, pr + 0.125);
+  if (pr === pixelRatio) return;
+  pixelRatio = pr; renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight);
+  for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
+  frCool = 4;
+}
 function loop(now) {
   requestAnimationFrame(loop);
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   if (paused) { Weather.silence(); drawFrame(); pressed.clear(); return; }
   tick(rdt);
-  drawFrame();
+  adaptResolution((now - prevNow) / 1000); prevNow = now;
+  if (!window.__noRender) drawFrame(); // debug: __noRender = true keeps the page responsive in software-rendered tests
   pressed.clear();
 }
 // one step of the world, without drawing (rdt: real seconds; dt: game seconds, slowed by hit-stop and slow motion)
@@ -2977,6 +3303,8 @@ function tick(rdt) {
 
   if (game.state !== 'title') {
     updatePlayer(dt);
+    const tg = currentTarget(), cand = !tg && P.drawn && P.state !== 'dead' ? acquireLock() : null;
+    for (const e of beasts) e.hl = e === tg ? 1 : e === cand ? 0.45 : 0;
     if (!window.__freezeAI) for (const e of beasts) e.update(dt);
     separate();
     if (game.state === 'between') {
@@ -2988,6 +3316,7 @@ function tick(rdt) {
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
   updateTorches(dt, time);
+  grassWind.value += dt * (1 + Weather.rain * 0.6); // a storm blows harder
   Weather.update(dt, time);
   barrier.update(dt, time); sky.material.uniforms.time.value = time;
   clockEl.crackle -= rdt;
