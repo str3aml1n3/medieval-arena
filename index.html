@@ -173,6 +173,9 @@
   #overlay, #pause, #loading { background-image:var(--tex-grain-bg), radial-gradient(ellipse at center, rgba(24,13,9,.45), rgba(8,4,4,.9)); }
   #loading { background-image:var(--tex-grain-bg), radial-gradient(ellipse at center, #2a1c14, #0b0606); }
   .opts select { background-image:var(--tex-grain); }
+  /* build stamp: only on the loading, title and pause screens */
+  #build { position:fixed; right:calc(env(safe-area-inset-right) + 12px); bottom:calc(env(safe-area-inset-bottom) + 8px); z-index:7; display:none; font-family:Georgia,serif; font-size:11px; letter-spacing:.08em; color:rgba(234,223,200,.5); text-shadow:0 1px 2px #000; pointer-events:none; }
+  #loading:not(.hidden) ~ #build, #pause:not(.hidden) ~ #build, #overlay:not(.hidden) ~ #build { display:block; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
@@ -311,6 +314,7 @@
     <button id="startBtn">ENTER THE ARENA</button>
   </div>
 </div>
+<div id="build"></div>
 <script type="module" src="game.js"></script>
 </body>
 </html>
