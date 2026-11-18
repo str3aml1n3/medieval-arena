@@ -5,6 +5,20 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const V3 = THREE.Vector3;
+// Specular occlusion (approximate). The sky reflection (the environment map) reaches every surface, even where sun and
+// torches don't, and that is what makes dull things look lacquered and lit up: shadowed stone, the hero's leather,
+// feathers. Here a non-metal's sky reflection fades with how much direct light actually reaches the point (its direct
+// diffuse light divided by its albedo), down to a third in full shadow. Metals keep more of theirs.
+THREE.ShaderChunk.lights_fragment_end += `
+#if defined( STANDARD ) && defined( RE_IndirectSpecular )
+{
+  float soDirect = dot( reflectedLight.directDiffuse, vec3( 0.299, 0.587, 0.114 ) );
+  float soAlbedo = max( dot( material.diffuseColor, vec3( 0.299, 0.587, 0.114 ) ), 0.02 );
+  float so = mix( 0.33, 1.0, clamp( soDirect / soAlbedo / 1.8, 0.0, 1.0 ) );
+  reflectedLight.indirectSpecular *= mix( so, 1.0, clamp( metalnessFactor, 0.0, 1.0 ) * 0.55 );
+}
+#endif
+`;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -376,14 +390,29 @@ function terrainMesh(geo, maps, tint) {
   m.receiveShadow = true; scene.add(m); return m;
 }
 const macro = (x, z, s) => 0.5 + 0.5 * (Math.sin(x * 0.27 * s + 1.7) * Math.cos(z * 0.23 * s - 0.6) * 0.6 + Math.sin((x - z) * 0.61 * s) * 0.25 + Math.sin(x * 1.37 * s + z * 0.97 * s) * 0.15);
-const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 140, grains: 9000, strength: 3.2, contrast: 1.5, dark: [78, 60, 40], light: [150, 124, 92], repeat: 7 });
+// The arena floor: grey-brown packed earth, not yellow sand. Over it lie patches of grey gravel, worn tracks (a ring
+// trodden round the middle by fighters circling each other, and a path in from the gate), and soggy, mossy green patches
+// where grass still clings on, mostly out of the way near the stockade. One function, so the grass tufts can find them.
+function arenaPatches(x, z) {
+  const r = Math.hypot(x, z), a = Math.atan2(x, z);
+  const gravel = clamp((macro(x * 0.9 + 31, z * 0.9 - 7, 1.1) - 0.6) * 3.2, 0, 1);
+  const green = clamp((macro(x * 0.55 - 19, z * 0.55 + 23, 0.9) - 0.6) * 3.4, 0, 1) * clamp((r - 6) / 6, 0, 1);
+  const ring = Math.exp(-((r - 10.5 + 0.7 * Math.sin(a * 3 + 1) + 0.4 * Math.sin(a * 7)) ** 2) / 1.6);
+  const path = z < 0 ? Math.exp(-((x + 0.9 * Math.sin(z * 0.35)) ** 2) / 1.2) * clamp((-z - 2) / 4, 0, 1) : 0;
+  return { gravel, green: green * (1 - Math.max(ring, path)), track: Math.max(ring, path) };
+}
+const sandMaps = groundMaps(1024, { blobs: 260, blobR: [6, 46], ripples: 40, stones: 160, grains: 9000, strength: 3.2, contrast: 1.45, dark: [64, 59, 52], light: [134, 126, 114], repeat: 7 });
 const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 200, 80), sandMaps, (x, z) => {
-  const m = macro(x, z, 1), r = Math.hypot(x, z), trodden = Math.exp(-r * r / 60) * 0.12;
-  const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.5;  // churned, darker mud
-  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.22;                                      // trodden filth along the wall
-  const v = (0.74 + m * 0.3 - trodden) * (1 - mud - grime);
-  return [v * 1.02, v * (1 - mud * 0.05), v * (0.94 - mud * 0.06)];
+  const m = macro(x, z, 1), r = Math.hypot(x, z), P0 = arenaPatches(x, z);
+  const mud = clamp((macro(x * 1.7 + 11, z * 1.7 - 4, 1.3) - 0.58) * 3.2, 0, 1) * 0.45;  // churned, darker mud
+  const grime = clamp((r - 12.5) / 4, 0, 1) * 0.2;                                       // trodden filth along the wall
+  const v = (0.76 + m * 0.26) * (1 - mud - grime) * (1 - P0.track * 0.22);               // tracks: packed down, darker
+  let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
+  const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
+  const gn = P0.green * 0.85; c = c.map((k, i) => lerp(k, v * [0.46, 0.54, 0.32][i], gn));       // muddy green
+  return c;
 });
+sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't sheen across it
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
 const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
@@ -393,7 +422,7 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
 });
 // loose pebbles on the sand
 {
-  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), phys(0xffffff, 0.55, 0, { specularColor: 0xbcd2ff }), n);
+  const n = 320, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75, 0, { envMapIntensity: 0.5 }), n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
     const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.8, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.03, 0.085);
@@ -403,16 +432,68 @@ const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 160, 90), grass
   }
   peb.castShadow = peb.receiveShadow = true; scene.add(peb);
 }
-// grass tufts around the outside of the stockade
+// grass tufts around the outside of the stockade: each tuft is a clump of thin, curved, tapering blades (dark at the
+// root, sun-bleached at the tip) that sway in the wind. The sway is done in the vertex shader, so it costs nothing on
+// the CPU; the tufts skip the depth pre-pass, since the pre-pass would draw them unswayed.
+const grassWind = { value: 0 };
 {
-  const n = 900, tuft = new THREE.InstancedMesh(new THREE.ConeGeometry(0.12, 0.45, 4), std(0xffffff, 0.9), n);
+  const BLADES = 11, SEG = 3, pos = [], col = [], nor = [], idx = [];
+  for (let b = 0; b < BLADES; b++) {
+    const th = rand(0, 6.28), lean = rand(0.25, 0.9), h = rand(0.22, 0.58), w = rand(0.018, 0.03);
+    const r0 = rand(0, 0.07), ox = Math.cos(th) * r0, oz = Math.sin(th) * r0;
+    const dx = Math.cos(th), dz = Math.sin(th), px = -dz, pz = dx; // lean direction, and across the blade
+    const tipTone = rand(0.85, 1.15), dry = Math.random() < 0.25;
+    const base = pos.length / 3;
+    for (let s = 0; s <= SEG; s++) {
+      const t = s / SEG, y = h * t * (1 - 0.18 * t * lean), out = lean * h * t * t * 0.8, ww = w * (1 - t) + 0.002;
+      for (const side of [-1, 1]) {
+        pos.push(ox + dx * out + px * ww * side, y, oz + dz * out + pz * ww * side);
+        const k = (0.35 + 0.65 * t) * tipTone; // dark at the root, light at the tip
+        col.push(k * (dry ? 1.25 : 1), k * (dry ? 1.1 : 1), k * (dry ? 0.7 : 1));
+        const n = new V3(dx * 0.35, 1, dz * 0.35).normalize(); // lit like the ground it grows from, not like a card
+        nor.push(n.x, n.y, n.z);
+      }
+      if (s < SEG) { const a = base + s * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  geo.setIndex(idx);
+  const mat = std(0xffffff, 0.88, 0, { vertexColors: true, side: THREE.DoubleSide, envMapIntensity: 0.35 });
+  mat.userData.noPrepass = true;
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWind = grassWind;
+    sh.vertexShader = 'uniform float uWind;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 gw = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+      float gust = 0.6 + 0.4 * sin(uWind * 0.37 + gw.x * 0.05 + gw.z * 0.04);
+      float sway = (sin(uWind * 1.9 + gw.x * 0.45 + gw.z * 0.31) * 0.6 + sin(uWind * 3.7 + gw.z * 0.8) * 0.25) * gust;
+      float bend = transformed.y * transformed.y * 0.9;
+      transformed.x += sway * bend; transformed.z += sway * bend * 0.5; transformed.y -= abs(sway) * bend * 0.15;`);
+  };
+  const n = TOUCH ? 900 : 1700, tuft = new THREE.InstancedMesh(geo, mat, n);
   const d = new THREE.Object3D(), c = new THREE.Color();
   for (let i = 0; i < n; i++) {
-    const a = rand(0, 6.28), r = rand(19.6, 60), x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.6, 1.6);
-    d.position.set(x, groundH(x, z) + 0.18 * s, z); d.rotation.set(rand(-0.2, 0.2), rand(0, 3), rand(-0.2, 0.2)); d.scale.setScalar(s);
-    d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.17, 0.25), rand(0.25, 0.45), rand(0.13, 0.22)));
+    // thicker against the stockade, thinning out into the town
+    const a = rand(0, 6.28), r = 19.6 + Math.pow(Math.random(), 1.8) * 40, x = Math.sin(a) * r, z = Math.cos(a) * r, s = rand(0.7, 1.5);
+    d.position.set(x, groundH(x, z) - 0.01, z); d.rotation.set(rand(-0.08, 0.08), rand(0, 6.28), rand(-0.08, 0.08)); d.scale.set(s, s * rand(0.8, 1.2), s);
+    d.updateMatrix(); tuft.setMatrixAt(i, d.matrix); tuft.setColorAt(i, c.setHSL(rand(0.16, 0.24), rand(0.3, 0.5), rand(0.2, 0.32)));
   }
   tuft.receiveShadow = true; scene.add(tuft);
+  // sparse, short, darker tufts in the muddy green patches on the arena floor
+  const spots = [];
+  for (let i = 0; i < 6000 && spots.length < (TOUCH ? 220 : 420); i++) {
+    const a = rand(0, 6.28), r = Math.sqrt(Math.random()) * 17.6, x = Math.sin(a) * r, z = Math.cos(a) * r;
+    if (Math.random() < arenaPatches(x, z).green * 0.9) spots.push([x, z]);
+  }
+  const inner = new THREE.InstancedMesh(geo, mat, spots.length);
+  spots.forEach(([x, z], i) => {
+    const s = rand(0.35, 0.75);
+    d.position.set(x, groundH(x, z) - 0.005, z); d.rotation.set(0, rand(0, 6.28), 0); d.scale.set(s, s * rand(0.6, 1), s);
+    d.updateMatrix(); inner.setMatrixAt(i, d.matrix); inner.setColorAt(i, c.setHSL(rand(0.17, 0.23), rand(0.25, 0.4), rand(0.14, 0.22)));
+  });
+  inner.receiveShadow = true; scene.add(inner);
 }
 
 // ---- weathering: soot streaks from the top, damp creeping up from the bottom, blotches and grit
@@ -444,6 +525,7 @@ function weather(g, s, o = {}) {
 // a canvas colour map that doubles as its own bump map — dark seams and cracks read as recessed
 // the faint, cold specular tint that stone, slate and wet surfaces glint with in the sun
 const COLD_SPEC = new THREE.Color(0xbcd2ff);
+const STONE_SPEC = new THREE.Color(0xdfe5ec); // only a hint of cold in dry stone's sheen; a blue cast reads as plastic
 function surfMat(tex, rough = 0.92, bump = 2, metal = 0, extra = {}) {
   return std(0xffffff, rough, metal, { map: tex, bumpMap: tex, bumpScale: bump, ...extra });
 }
@@ -559,14 +641,14 @@ const stoneMaps = (() => {
   for (let i = 0; i < C.length; i += 4) {
     if (Hd[i] < 60) continue; // mortar stays dead matte
     const lum = (C[i] * 0.3 + C[i + 1] * 0.59 + C[i + 2] * 0.11) / 255, moss = C[i + 1] > C[i] + 3 ? 0.3 : 0;
-    const r = clamp(R.data[i] / 255 - (0.26 - lum) * 1.4 + moss + (Math.random() - 0.5) * 0.08, 0.18, 1) * 255;
+    const r = clamp(R.data[i] / 255 - (0.26 - lum) * 1.4 + moss + (Math.random() - 0.5) * 0.08, 0.34, 1) * 255; // damp, not glassy
     R.data[i] = R.data[i + 1] = R.data[i + 2] = r;
   }
   rg.putImageData(R, 0, 0);
   const map = dataTex(cc); map.colorSpace = THREE.SRGBColorSpace;
   return { map, normalMap: dataTex(heightToNormal(Hd, s, 7)), roughnessMap: dataTex(rc) };
 })();
-const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: COLD_SPEC, specularIntensity: 1 });
+const stoneM = phys(0xffffff, 1, 0, { ...stoneMaps, normalScale: new THREE.Vector2(1.3, 1.3), specularColor: STONE_SPEC, specularIntensity: 0.4, envMapIntensity: 0.45 });
 stoneM.userData.world = 3.5;
 
 // worn steel: brushed grain, fine bright scratches, dull smudges and pits — a roughness texture so reflections
@@ -871,8 +953,8 @@ function buildTown() {
   }, '#2a2214');
   // tw/course: tile size (m); lift: how far each course's butt stands proud; jit: per-tile wobble; sag: belly between eave and ridge
   const ROOF = {
-    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: COLD_SPEC, specularIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
-    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: COLD_SPEC, specularIntensity: 1, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
+    clay:    { mat: phys(0xffffff, 1, 0, { map: clayTex, ...deriveMaps(clayTex, 0.72, 5), specularColor: STONE_SPEC, specularIntensity: 0.35, envMapIntensity: 0.6, side: THREE.DoubleSide }), tw: 0.36, course: 0.32, lift: 0.075, jit: 0.45, sag: 0.1, ridge: 0.13 },
+    slate:   { mat: phys(0xffffff, 1, 0, { map: slateTex, ...deriveMaps(slateTex, 0.48, 5), specularColor: STONE_SPEC, specularIntensity: 0.5, envMapIntensity: 0.65, side: THREE.DoubleSide }), tw: 0.38, course: 0.26, lift: 0.04, jit: 0.5, sag: 0.07, ridge: 0.09 },
     shingle: { mat: surfMat(shingleTex, 0.95, 2, 0, { side: THREE.DoubleSide }), tw: 0.24, course: 0.24, lift: 0.045, jit: 0.6, sag: 0.12, ridge: 0.1 },
     thatch:  { mat: surfMat(thatchTex, 1, 3, 0, { side: THREE.DoubleSide }), tw: 0.5, course: 0.42, lift: 0.13, jit: 0.3, sag: 0.18, ridge: 0.3, bulge: true },
   };
@@ -1842,13 +1924,13 @@ const SFX = {
 function buildHero() {
   const M = {
     skin: phys(0xc4906f, 0.6, 0, { sheen: 0.3, sheenColor: 0xffd8c0 }),
-    leather: phys(0x4b3020, 0.55, 0, { clearcoat: 0.55, clearcoatRoughness: 0.3 }),
+    leather: std(0x4b3020, 0.8),
     cloth: phys(0x37362c, 0.85, 0, { sheen: 0.7, sheenColor: 0x9fb4cc, sheenRoughness: 0.45 }),
     sash: phys(0x8c2a1c, 0.8, 0, { sheen: 0.5, sheenColor: 0xd0c0c8 }),
-    boot: phys(0x271a10, 0.45, 0, { clearcoat: 0.6, clearcoatRoughness: 0.25 }), hair: std(0x2a1b12, 1),
-    metal: phys(0xd8e0ea, 0.12, 1.0, { clearcoat: 1, clearcoatRoughness: 0.06, emissive: 0x000000 }),
-    steel: phys(0xb4bfcc, 0.2, 1.0, { clearcoat: 0.9, clearcoatRoughness: 0.12 }),
-    iron: phys(0x5c6168, 0.3, 0.9, { clearcoat: 0.6, clearcoatRoughness: 0.2 }), eye: phys(0x111111, 0.1, 0, { clearcoat: 1 }),
+    boot: std(0x271a10, 0.75), hair: std(0x2a1b12, 1),
+    metal: std(0xd8e0ea, 0.3, 1.0, { roughnessMap: metalRough, emissive: 0x000000 }),
+    steel: std(0xa4adb8, 0.85, 0.85, { roughnessMap: metalRough }),
+    iron: std(0x5c6168, 1.1, 0.8, { roughnessMap: metalRough }), eye: phys(0x111111, 0.1, 0, { clearcoat: 1 }),
   };
   const root = new THREE.Group(); root.rotation.order = 'YXZ';
   const j = {};
@@ -1970,17 +2052,19 @@ function buildHeroGLB(tpl) {
   const vc = { vertexColors: true };
   const M = {
     // worn, matte finishes: skin with a soft sheen, dry leather, dull brushed steel; only the blade keeps an edge of shine
-    skin: phys(0x9a6e55, 0.74, 0, { ...vc, sheen: 0.25, sheenColor: 0xd8a890, sheenRoughness: 0.6 }),
+    skin: phys(0x9a6e55, 0.8, 0, { ...vc, sheen: 0.1, sheenColor: 0xd8a890, sheenRoughness: 0.7, specularIntensity: 0.5, envMapIntensity: 0.5 }),
     leather: std(0x50301d, 0.82, 0, vc),
     cloth: std(0x3d3c31, 0.96, 0, { ...vc, side: THREE.DoubleSide }),
     sash: std(0x7a2418, 0.92, 0, { ...vc, side: THREE.DoubleSide }),
     boot: std(0x2b1d12, 0.78, 0, vc),
     hair: std(0x2a1b12, 1, 0, vc),
     // metals: worn and dull underneath, with a thin clear layer that throws a small, crisp, cold highlight
-    steel: phys(0x868b92, 1.05, 0.75, { ...vc, roughnessMap: metalRough, clearcoat: 0.35, clearcoatRoughness: 0.5, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.25, envMapIntensity: 0.6 }),
-    iron: phys(0x46474a, 1.35, 0.65, { ...vc, roughnessMap: metalRough, clearcoat: 0.18, clearcoatRoughness: 0.7, clearcoatRoughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.3, envMapIntensity: 0.45 }),
-    mail: phys(0x5f6266, 1.3, 0.7, { ...vc, roughnessMap: metalRough, side: THREE.DoubleSide, clearcoat: 0.15, clearcoatRoughness: 0.8, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.45 }),
-    metal: phys(0xb8c0c8, 0.55, 1.0, { ...vc, roughnessMap: metalRough, emissive: 0x000000, clearcoat: 0.4, clearcoatRoughness: 0.28, clearcoatRoughnessMap: metalRough, envMapIntensity: 0.8 }),
+    // No clearcoat: worn steel has no lacquer over it, and a clear layer is what made the armour read as plastic.
+    // The roughness texture breaks the reflections up instead (scratches and burnish glint, smudges stay dull).
+    steel: std(0x868b92, 0.88, 0.8, { ...vc, roughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.25, envMapIntensity: 0.55 }),
+    iron: std(0x46474a, 1.35, 0.7, { ...vc, roughnessMap: metalRough, bumpMap: metalRough, bumpScale: 0.3, envMapIntensity: 0.4 }),
+    mail: std(0x5f6266, 1.4, 0.7, { ...vc, roughnessMap: metalRough, side: THREE.DoubleSide, envMapIntensity: 0.4 }),
+    metal: std(0xb8c0c8, 0.6, 1.0, { ...vc, roughnessMap: metalRough, emissive: 0x000000, envMapIntensity: 0.75 }),
     eye: std(0xb8b0a2, 0.45, 0, vc),
   };
   const model = tpl.clone(true);
@@ -3064,20 +3148,68 @@ function updateCamera(dt) {
   camera.position.lerp(cp, 1 - Math.exp(-14 * dt));
   if (shake > 0) { camera.position.add(new V3(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(shake * 0.12)); shake = Math.max(0, shake - dt * 2.2); }
   camera.lookAt(camLook);
+  if (window.__dbgCam) { camera.position.copy(window.__dbgCam.pos); camera.lookAt(window.__dbgCam.target); } // debug: a fixed view
 }
+// Gothic-style bars, drawn here rather than taken from Gothic: a frame of dark, worn iron with tapered, riveted ends
+// and a sunken channel, and fills of grainy, bevelled colour like Gothic's bar textures. The frame is a CSS
+// border-image (the ends keep their shape at any width), and the fills are cut off by clip-path instead of squeezed,
+// so their grain doesn't smear as the bar drops.
+(function barSkins() {
+  const cv = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; };
+  const W = 256, H = 44, [fc, f] = cv(W, H);
+  const shape = () => { f.beginPath(); f.moveTo(2, 22); f.lineTo(20, 3); f.lineTo(W - 20, 3); f.lineTo(W - 2, 22); f.lineTo(W - 20, 41); f.lineTo(20, 41); f.closePath(); };
+  shape(); f.save(); f.clip();
+  const mg = f.createLinearGradient(0, 3, 0, 41);
+  mg.addColorStop(0, '#9b9384'); mg.addColorStop(0.18, '#6d665a'); mg.addColorStop(0.55, '#47413a'); mg.addColorStop(1, '#221d18');
+  f.fillStyle = mg; f.fillRect(0, 0, W, H);
+  for (let i = 0; i < 900; i++) { f.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,240,220'},${rand(0.04, 0.16)})`; f.fillRect(rand(0, W), rand(0, H), rand(1, 3), rand(1, 2)); } // pitting
+  for (let i = 0; i < 26; i++) { f.strokeStyle = `rgba(20,14,10,${rand(0.15, 0.4)})`; f.lineWidth = rand(0.5, 1.2); const x = rand(0, W), y = rand(3, 41); f.beginPath(); f.moveTo(x, y); f.lineTo(x + rand(-14, 14), y + rand(-2, 2)); f.stroke(); } // scratches
+  for (let i = 0; i < 10; i++) { const x = rand(0, W), gr = f.createRadialGradient(x, 30, 0, x, 30, rand(6, 16)); gr.addColorStop(0, 'rgba(110,52,22,.35)'); gr.addColorStop(1, 'rgba(110,52,22,0)'); f.fillStyle = gr; f.fillRect(x - 16, 14, 32, 30); } // rust
+  // the sunken channel the fill sits in
+  f.fillStyle = '#0d0806'; f.fillRect(24, 10, W - 48, 24);
+  const ch = f.createLinearGradient(0, 10, 0, 34); ch.addColorStop(0, 'rgba(0,0,0,.85)'); ch.addColorStop(0.3, 'rgba(0,0,0,0)'); ch.addColorStop(1, 'rgba(255,230,190,.08)');
+  f.fillStyle = ch; f.fillRect(24, 10, W - 48, 24);
+  f.restore();
+  // bevels: a lit upper edge, a dark outline, and the lip around the channel
+  shape(); f.strokeStyle = '#0b0705'; f.lineWidth = 2.5; f.stroke();
+  f.strokeStyle = 'rgba(235,225,200,.45)'; f.lineWidth = 1; f.beginPath(); f.moveTo(21, 5); f.lineTo(W - 21, 5); f.stroke();
+  f.strokeStyle = 'rgba(0,0,0,.9)'; f.strokeRect(24.5, 10.5, W - 49, 23);
+  f.strokeStyle = 'rgba(220,205,170,.25)'; f.beginPath(); f.moveTo(24, 34.5); f.lineTo(W - 24, 34.5); f.stroke();
+  for (const x of [12, W - 12]) { // rivets on the ends
+    const rg = f.createRadialGradient(x - 1.2, 20.5, 0.5, x, 22, 4.5); rg.addColorStop(0, '#d9d0bd'); rg.addColorStop(0.5, '#6d665a'); rg.addColorStop(1, '#1a1511');
+    f.fillStyle = rg; f.beginPath(); f.arc(x, 22, 4.2, 0, 7); f.fill();
+  }
+  const fill = (top, mid, bot) => {
+    const [c, x] = cv(128, 24);
+    const gr = x.createLinearGradient(0, 0, 0, 24);
+    gr.addColorStop(0, top); gr.addColorStop(0.32, mid); gr.addColorStop(1, bot);
+    x.fillStyle = gr; x.fillRect(0, 0, 128, 24);
+    for (let i = 0; i < 40; i++) { x.fillStyle = `rgba(0,0,0,${rand(0.05, 0.18)})`; x.fillRect(0, rand(0, 24), 128, rand(0.5, 1.5)); } // fibrous streaks
+    for (let i = 0; i < 700; i++) { x.fillStyle = `rgba(${Math.random() < 0.55 ? '0,0,0' : '255,235,210'},${rand(0.04, 0.16)})`; x.fillRect(rand(0, 128), rand(0, 24), rand(1, 2.5), 1); } // grain
+    x.fillStyle = 'rgba(255,240,220,.28)'; x.fillRect(0, 4, 128, 1.5); // the glossy bead along the top
+    x.fillStyle = 'rgba(0,0,0,.35)'; x.fillRect(0, 22, 128, 2);
+    return `url(${c.toDataURL()})`;
+  };
+  const css = document.documentElement.style;
+  css.setProperty('--bar-frame', `url(${fc.toDataURL()})`);
+  css.setProperty('--fill-hp', fill('#f0745c', '#c0281b', '#4e0905'));
+  css.setProperty('--fill-st', fill('#ece0a0', '#ad9338', '#3e3210'));
+  css.setProperty('--fill-foe', fill('#e9875a', '#a8381a', '#3d0f05'));
+})();
+const setBar = (el, v) => { el.style.clipPath = `inset(0 ${(100 - clamp(v, 0, 1) * 100).toFixed(2)}% 0 0)`; };
 function updateHUD(dt) {
   P.ghostHp = damp(P.ghostHp, P.hp, 3, dt);
-  $('php').querySelector('.fill').style.transform = `scaleX(${P.hp / P.maxHp})`;
-  $('php').querySelector('.ghost').style.transform = `scaleX(${P.ghostHp / P.maxHp})`;
-  $('pst').querySelector('.fill').style.transform = `scaleX(${Math.max(0, P.st) / P.maxSt})`;
+  setBar($('php').querySelector('.fill'), P.hp / P.maxHp);
+  setBar($('php').querySelector('.ghost'), P.ghostHp / P.maxHp);
+  setBar($('pst').querySelector('.fill'), P.st / P.maxSt);
   $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : (touch.portrait ? 'UNARMED — TAP TO STRIKE' : touch.enabled ? 'UNARMED — TAP DRAW' : 'UNARMED — PRESS CTRL');
   const tgt = currentTarget() || beasts.find(e => !e.dead && e.state !== 'wait');
   const eb = $('ebox');
   if (tgt && game.state !== 'title') {
     eb.style.opacity = 1;
     tgt.ghostHp = damp(tgt.ghostHp, tgt.hp, 3, dt);
-    $('ebar').querySelector('.fill').style.transform = `scaleX(${Math.max(0, tgt.hp) / tgt.maxHp})`;
-    $('ebar').querySelector('.ghost').style.transform = `scaleX(${Math.max(0, tgt.ghostHp) / tgt.maxHp})`;
+    setBar($('ebar').querySelector('.fill'), tgt.hp / tgt.maxHp);
+    setBar($('ebar').querySelector('.ghost'), tgt.ghostHp / tgt.maxHp);
     $('ename').textContent = tgt.name;
   } else eb.style.opacity = 0;
   // a small gold chevron over the locked beast's head
@@ -3126,7 +3258,7 @@ function drawFrame() {
   scene.traverse(o => {
     if (!o.isMesh && !o.isPoints && !o.isLine) return;
     const m = o.material;
-    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
+    if (o.isMesh && !m.transparent && !m.isShaderMaterial && m.depthWrite && m.depthTest && !m.userData.noPrepass) { o.layers.set(0); prepassed.push(o, m); o.material = depthMats[m.side]; }
     else o.layers.set(1); // transparent things, particles, lightning, sky, barrier: main pass only
   });
   camera.layers.set(0);
@@ -3184,6 +3316,7 @@ function tick(rdt) {
     hero.root.position.set(0, 0, 7); hero.root.rotation.y = Math.PI;
   }
   updateTorches(dt, time);
+  grassWind.value += dt * (1 + Weather.rain * 0.6); // a storm blows harder
   Weather.update(dt, time);
   barrier.update(dt, time); sky.material.uniforms.time.value = time;
   clockEl.crackle -= rdt;
