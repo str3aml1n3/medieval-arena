@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { BUILD } from './version.js';
 
 const V3 = THREE.Vector3;
 // Specular occlusion (approximate). The sky reflection (the environment map) reaches every surface, even where sun and
@@ -289,11 +290,20 @@ const barrier = (() => {
     },
   };
 })();
+let rebakeEnv = () => {};
 // bake the sky into an environment map so every glossy surface picks up cold sky reflections
 {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene(); envScene.add(new THREE.Mesh(sky.geometry, sky.material));
-  scene.environment = pmrem.fromScene(envScene, 0, 0.1, 1000).texture;
+  let envRT = pmrem.fromScene(envScene, 0, 0.1, 1000);
+  scene.environment = envRT.texture;
+  // the reflections are a picture of the sky: when it clouds over, take a new one (a few times per change of weather),
+  // or wet ground in the rain would still mirror a blue sky
+  rebakeEnv = () => {
+    const fl = sky.material.uniforms.flash.value; sky.material.uniforms.flash.value = 0;
+    const rt = pmrem.fromScene(envScene, 0, 0.1, 1000); sky.material.uniforms.flash.value = fl;
+    scene.environment = rt.texture; envRT.dispose(); envRT = rt;
+  };
 }
 
 const hemi = new THREE.HemisphereLight(0xcfe0ff, 0x6a5a40, 0.55);
@@ -398,6 +408,7 @@ function terrainMesh(geo, maps, tint) {
   m.receiveShadow = true; scene.add(m); return m;
 }
 // large-scale variation across the ground (irregular patches, no stripes): roughly 0..1
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const macro = (x, z, s) => clamp((fbm2(x * 0.2 * s + 7.3, z * 0.2 * s - 3.1, 3) - 0.5) * 2.1 + 0.5, 0, 1);
 // The arena floor: grey-brown packed earth, not yellow sand. Over it lie patches of grey gravel, worn tracks (a ring
 // trodden round the middle by fighters circling each other, and a path in from the gate), and soggy, mossy green patches
@@ -419,16 +430,38 @@ const sandFloor = terrainMesh(new THREE.RingGeometry(0.001, 19.4, 150, 56), sand
   let c = [v * 0.98, v * 0.95, v * 0.9];                                                 // grey-brown earth
   const gr = P0.gravel * 0.75; c = c.map((k, i) => lerp(k, v * [0.92, 0.92, 0.93][i] * 1.08, gr)); // grey gravel
   const gn = P0.green * 0.85; c = c.map((k, i) => lerp(k, v * [0.46, 0.54, 0.32][i], gn));       // muddy green
-  return c;
+  // contact shadow (baked ambient occlusion): the ground darkens as it runs in under the palisade and the stone walls,
+  // so the wall sits in the earth instead of standing on it
+  const ao = 1 - 0.62 * smoothstep(16.6, 18.35, r) - 0.12 * smoothstep(14.5, 17, r);
+  return c.map(k => k * ao);
 });
 sandFloor.material.envMapIntensity = 0.45; // dull earth: the cold sky shouldn't sheen across it
+// Wet ground (rain): wetness isn't even. Two octaves of world-space noise make a wetness mask; as the ground soaks, the
+// hollows go first (dark and glossy, almost like standing water) while bumps stay damp and matte, and the wet area
+// grows the longer it rains. `uWet` is the weather's soak level (0 dry .. 1 soaked).
+const groundWet = { value: 0 };
+function wetGround(mat, scale = 1) {
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uWet = groundWet; sh.uniforms.uNoiseW = { value: noiseTex };
+    sh.vertexShader = 'varying vec3 vWetPos;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWetPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = 'uniform float uWet; uniform sampler2D uNoiseW; varying vec3 vWetPos;\n' + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float wn = texture2D(uNoiseW, vWetPos.xz * ${(0.0016 * scale).toFixed(5)}).g * 0.62 + texture2D(uNoiseW, vWetPos.xz * ${(0.0062 * scale).toFixed(5)} + 0.37).g * 0.38;
+        float wetM = smoothstep(0.74 - 0.36 * uWet, 0.86 - 0.34 * uWet, wn) * smoothstep(0.02, 0.25, uWet);
+        diffuseColor.rgb *= 1.0 - 0.14 * uWet - 0.3 * wetM;`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor * (1.0 - 0.12 * uWet), 0.14, wetM);`);
+  };
+}
+wetGround(sandFloor.material);
 const grassMaps = groundMaps(512, { blobs: 220, blobR: [6, 50], stones: 30, grains: 22000, blades: true, strength: 2.4, contrast: 1.4, dark: [36, 46, 22], light: [92, 104, 56], repeat: 70 });
 const grassFloor = terrainMesh(new THREE.RingGeometry(19.0, 260, 120, 60), grassMaps, (x, z) => {
   const m = macro(x, z, 0.35), d = macro(x + 40, z - 17, 0.9), r = Math.hypot(x, z);
   const worn = Math.exp(-((r - 22) ** 2) / 8) * 0.5 + (Math.abs(x) < 4 && z < -18 ? 0.5 : 0); // trampled ring + road edge
-  const dry = clamp(d * 0.6 + worn, 0, 1), b = 0.85 + m * 0.3;
+  const dry = clamp(d * 0.6 + worn, 0, 1), b = (0.85 + m * 0.3) * (1 - 0.5 * (1 - smoothstep(18.9, 20.4, r))); // contact shadow outside the wall
   return [lerp(0.8, 1.25, dry) * b, lerp(1, 0.92, dry) * b, 0.83 * b];
 });
+wetGround(grassFloor.material, 0.6);
 // loose pebbles on the sand
 {
   const n = TOUCH ? 90 : 170, peb = new THREE.InstancedMesh(new THREE.DodecahedronGeometry(1, 0), std(0xffffff, 0.75, 0, { envMapIntensity: 0.5 }), n);
@@ -555,6 +588,7 @@ const woodTex = canvasTex(256, (g, s) => {
   weather(g, s, { streaks: 14, damp: 0.35, dampA: 0.5, blotches: 14, moss: 0.3, grit: 1500 });
 });
 const logMat = surfMat(woodTex, 0.95, 2.5);
+const logMatAO = logMat.clone(); logMatAO.vertexColors = true; // the palisade logs, with their bases darkened
 const darkWood = surfMat(woodTex, 0.93, 2.5, 0, { color: 0x8a7a6a });
 
 // rough, pitted rust for every bit of old iron
@@ -805,7 +839,11 @@ const metalRough = (() => {
   }
   sbox(5.8, 1.3, 1.6, Math.PI, R + 0.1, 7.0);
   bakeStatic(masonry);
-  const logs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.27, 0.31, 1, 9), logMat, pts.length);
+  // the bottom of every log is darker where it goes into the earth (vertex colours: a cheap, baked ambient occlusion)
+  const logGeo = new THREE.CylinderGeometry(0.27, 0.31, 1, 9, 8), lp = logGeo.attributes.position, lc = new Float32Array(lp.count * 3);
+  for (let i = 0; i < lp.count; i++) { const k = 0.42 + 0.58 * smoothstep(-0.5, -0.36, lp.getY(i)); lc[i * 3] = lc[i * 3 + 1] = lc[i * 3 + 2] = k; }
+  logGeo.setAttribute('color', new THREE.BufferAttribute(lc, 3));
+  const logs = new THREE.InstancedMesh(logGeo, logMatAO, pts.length);
   const tips = new THREE.InstancedMesh(new THREE.ConeGeometry(0.27, 0.7, 9), logMat, pts.length);
   const d = new THREE.Object3D();
   pts.forEach((p, i) => {
@@ -1511,7 +1549,8 @@ const Weather = (() => {
   const FOG_DRY = new THREE.Color(0x8e9296), FOG_WET = new THREE.Color(0x676d71), FOG_D = 0.0058;
   const smooth = x => x * x * (3 - 2 * x);
   // surfaces that get wet: [material, dry roughness]
-  const wetMats = [sandFloor.material, grassFloor.material, stoneM, logMat, darkWood].map(m => [m, m.roughness]);
+  const wetMats = [stoneM, logMat, logMatAO, darkWood].map(m => [m, m.roughness]); // the ground has its own, patchy wetness (wetGround)
+  let bakedOC = 0;
   const N = 1500, BOX = [30, 18, 30], FALL = 14, WIND = [2.4, 1.0], LEN = 0.6;
   const pos = new Float32Array(N * 6), seed = new Float32Array(N * 3);
   for (let i = 0; i < seed.length; i++) seed[i] = Math.random();
@@ -1546,7 +1585,9 @@ const Weather = (() => {
     sky.material.uniforms.overcast.value = c;
     scene.fog.color.lerpColors(FOG_DRY, FOG_WET, c); scene.fog.density = FOG_D * (1 + 0.9 * c);
     sun.intensity = 2.75 * (1 - 0.62 * c); coldFill.intensity = 1.1 * (1 - 0.35 * c); hemi.intensity = 0.55 * (1 + 0.15 * c);
-    for (const [m, r] of wetMats) { m.roughness = r * (1 - 0.42 * w); m.color.setScalar(1 - 0.24 * w); }
+    for (const [m, r] of wetMats) { m.roughness = r * (1 - 0.3 * w); m.color.setScalar(1 - 0.22 * w); }
+    groundWet.value = w;
+    if (Math.abs(c - bakedOC) > 0.2 || (c !== bakedOC && (c === 0 || c === 1))) { bakedOC = c; rebakeEnv(); } // re-take the sky reflection
     // rain streaks: each drop loops through a box that moves with the camera, slanted by the wind
     const r = wx.rain;
     lines.visible = r > 0.01;
@@ -2917,6 +2958,8 @@ function resumeGame() {
   last = performance.now();
   lockPointer();
 }
+// build stamp (version.js), shown on the loading, title and pause screens so you can tell which version is deployed
+$('build').textContent = `BUILD ${BUILD.build} · ${BUILD.date}`;
 $('resumeBtn').onclick = resumeGame;
 $('ctlBtn').onclick = () => $('pctl').classList.toggle('open');
 $('restartBtn').onclick = () => { resumeGame(); resetGame(); };
