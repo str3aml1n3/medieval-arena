@@ -56,6 +56,7 @@ names). Animation is procedural:
 
 ## Look
 - **Bars:** Gothic-style bars (`barSkins`). The worn iron frame with tapered, riveted ends is a canvas used as a CSS `border-image`. The grainy, bevelled fills are canvases too, and they are cut by `clip-path` rather than squeezed.
+- **Worn UI:** `uiSkins()` draws a grain texture, a quieter backdrop grain and two wear masks (chips, pits, scratches) and hands them to CSS as variables. Big lettering is a rubbed gold gradient clipped to the text and eroded by the wear mask; buttons, touch buttons and panels get the grain and a lighter wear.
 - **Reflections:** materials avoid the plastic look. There's no clearcoat on the armour, leather or boots; the stone and roof sheen is neutral and weaker; and the sky reflection on dull surfaces is turned down. A patch to `lights_fragment_end` adds approximate specular occlusion: the sky reflection on non-metals fades with the direct light reaching the point, down to a third in full shadow.
 - **Grass:** each tuft is a clump of 11 curved, tapering blades with vertex colours, swaying in the wind in the vertex shader (`grassWind`). The tufts skip the depth pre-pass, which would draw them without the sway. Short tufts also grow in the arena's green patches.
 - **Arena floor:** `arenaPatches(x, z)` gives the gravel, green and track weights that tint the floor and place those tufts.

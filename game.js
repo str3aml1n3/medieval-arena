@@ -3208,6 +3208,36 @@ function updateCamera(dt) {
   css.setProperty('--fill-st', fill('#ece0a0', '#ad9338', '#3e3210'));
   css.setProperty('--fill-foe', fill('#e9875a', '#a8381a', '#3d0f05'));
 })();
+// Worn UI: the same treatment for the lettering and the menus. A grain layer (specks, pitting, fine scratches) lies over
+// every surface; gold lettering is a cast, rubbed gradient; and a wear mask chips and scratches the big letters and
+// the buttons, as if the paint had worn off. Applied in index.html through CSS variables.
+(function uiSkins() {
+  const cv = s => { const c = document.createElement('canvas'); c.width = c.height = s; return [c, c.getContext('2d')]; };
+  const url = c => `url(${c.toDataURL()})`, css = document.documentElement.style;
+  // grain: transparent, so it darkens and lightens whatever it lies on
+  const [gc, g] = cv(256);
+  for (let i = 0; i < 2600; i++) { g.fillStyle = `rgba(${Math.random() < 0.6 ? '0,0,0' : '255,240,215'},${rand(0.04, 0.16)})`; g.fillRect(rand(0, 256), rand(0, 256), rand(0.8, 2.4), rand(0.8, 2.2)); }
+  for (let i = 0; i < 40; i++) { const x = rand(0, 256), y = rand(0, 256), r = rand(6, 26), gr = g.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgba(0,0,0,${rand(0.05, 0.14)})`); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, 2 * r, 2 * r); } // grime
+  for (let i = 0; i < 34; i++) { g.strokeStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,235,200'},${rand(0.06, 0.16)})`; g.lineWidth = rand(0.5, 1.1); const x = rand(0, 256), y = rand(0, 256), a = rand(-0.5, 0.5); g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * rand(14, 60), y + Math.sin(a) * rand(14, 60)); g.stroke(); }
+  css.setProperty('--tex-grain', url(gc));
+  // a quieter grain for full-screen backdrops (bright specks there read as falling snow)
+  const [bc, b] = cv(256);
+  for (let i = 0; i < 1800; i++) { b.fillStyle = `rgba(${Math.random() < 0.85 ? '0,0,0' : '255,240,215'},${rand(0.03, 0.08)})`; b.fillRect(rand(0, 256), rand(0, 256), rand(0.8, 2), rand(0.8, 2)); }
+  for (let i = 0; i < 30; i++) { const x = rand(0, 256), y = rand(0, 256), r = rand(10, 40), gr = b.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgba(0,0,0,${rand(0.04, 0.1)})`); gr.addColorStop(1, 'rgba(0,0,0,0)'); b.fillStyle = gr; b.fillRect(x - r, y - r, 2 * r, 2 * r); }
+  css.setProperty('--tex-grain-bg', url(bc));
+  // wear mask: opaque, with chips, pits and scratches knocked out of it
+  const wear = (chips, scratches) => {
+    const [c, x] = cv(256);
+    x.fillStyle = '#fff'; x.fillRect(0, 0, 256, 256);
+    x.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < chips; i++) { x.fillStyle = `rgba(0,0,0,${rand(0.35, 0.95)})`; x.beginPath(); x.ellipse(rand(0, 256), rand(0, 256), rand(0.6, 2.6), rand(0.5, 1.8), rand(0, 3), 0, 7); x.fill(); }
+    for (let i = 0; i < scratches; i++) { x.strokeStyle = `rgba(0,0,0,${rand(0.35, 0.8)})`; x.lineWidth = rand(0.6, 1.4); const sx = rand(0, 256), sy = rand(0, 256), a = rand(0, 3.14); x.beginPath(); x.moveTo(sx, sy); x.lineTo(sx + Math.cos(a) * rand(8, 34), sy + Math.sin(a) * rand(8, 34)); x.stroke(); }
+    for (let i = 0; i < 400; i++) { x.fillStyle = `rgba(0,0,0,${rand(0.08, 0.3)})`; x.fillRect(rand(0, 256), rand(0, 256), 1, 1); } // fine pitting
+    return url(c);
+  };
+  css.setProperty('--tex-wear', wear(260, 22));       // big lettering
+  css.setProperty('--tex-wear-soft', wear(110, 10));  // buttons and small panels
+})();
 const setBar = (el, v) => { el.style.clipPath = `inset(0 ${(100 - clamp(v, 0, 1) * 100).toFixed(2)}% 0 0)`; };
 function updateHUD(dt) {
   P.ghostHp = damp(P.ghostHp, P.hp, 3, dt);
