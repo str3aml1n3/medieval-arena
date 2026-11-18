@@ -2372,8 +2372,9 @@ function triplanarDetail(mat, tex, scale, bump, strength = 1, roughVar = 0) {
         roughnessFactor = clamp(roughnessFactor + (0.5 - det) * ${roughVar.toFixed(2)}, 0.05, 1.0);`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         normal = normalize(normal - mat3(vNm0, vNm1, vNm2) * dn * ${bump.toFixed(3)});`);
+    mat.userData.extraCompile?.(sh);
   };
-  mat.customProgramCacheKey = () => 'detail' + scale + bump + strength;
+  mat.customProgramCacheKey = () => 'detail' + scale + bump + strength + (mat.userData.extraKey || '');
   return mat;
 }
 
@@ -2628,16 +2629,55 @@ const PALETTES = [
   { plume: 0x1d1a1c, rust: 0x8e1c18, belly: 0x5a3a30, name: 'BLOODCREST THORNBEAK' },
 ];
 // glossy, oily plumage with a cold blue sheen; lacquered beak, thorns and talons
+// ---- the Thornbeak's surfaces: procedural detail textures, projected from three sides like the hero's (no UVs)
+// feathers: overlapping vanes in staggered rows, each with a central shaft and fine barbs angled off it
+const featherTex = detailTex((x, s) => {
+  x.fillStyle = 'rgb(96,96,96)'; x.fillRect(0, 0, s, s);
+  const rows = 7, cols = 6, fh = s / rows * 1.9, fw = s / cols * 0.62;
+  for (let r = rows; r >= -1; r--) for (let c = 0; c < cols; c++) {
+    const cx = (c + (r % 2) * 0.5) / cols * s + rand(-4, 4), cy = r / rows * s + rand(-3, 3), v = rand(120, 160) | 0, a = rand(-0.12, 0.12);
+    wrapDraw(x, s, (ox, oy) => {
+      x.save(); x.translate(cx + ox, cy + oy); x.rotate(a);
+      x.fillStyle = 'rgba(40,40,40,.5)'; x.beginPath(); x.ellipse(0, fh * 0.42, fw * 0.55, fh * 0.52, 0, 0, 7); x.fill();   // the shadow it casts on the one below
+      x.fillStyle = `rgb(${v},${v},${v})`; x.beginPath(); x.ellipse(0, fh * 0.38, fw * 0.5, fh * 0.5, 0, 0, 7); x.fill();
+      for (let k = 0; k < 16; k++) { const y = fh * (0.02 + k / 16 * 0.78); for (const sd of [-1, 1]) { // barbs
+        x.strokeStyle = `rgba(${Math.random() < 0.5 ? '50,50,50' : '200,200,200'},.35)`; x.lineWidth = 0.9;
+        x.beginPath(); x.moveTo(0, y); x.lineTo(sd * fw * 0.46, y + fh * 0.12); x.stroke(); } }
+      x.strokeStyle = 'rgba(205,205,205,.7)'; x.lineWidth = 1.4; x.beginPath(); x.moveTo(0, -fh * 0.08); x.lineTo(0, fh * 0.82); x.stroke(); // the shaft
+      x.restore();
+    });
+  }
+});
+// beak, thorns and talons: keratin in layers, growth streaks running its length, darker mottling
+const beakTex = detailTex((x, s) => {
+  x.fillStyle = 'rgb(128,128,128)'; x.fillRect(0, 0, s, s);
+  for (let i = 0; i < 160; i++) { const px = rand(0, s), v = rand(90, 175) | 0, w = rand(0.6, 2.6); wrapDraw(x, s, (ox, oy) => { x.strokeStyle = `rgba(${v},${v},${v},.45)`; x.lineWidth = w; x.beginPath(); x.moveTo(px + ox, oy); x.bezierCurveTo(px + ox + rand(-4, 4), oy + s * 0.33, px + ox + rand(-4, 4), oy + s * 0.66, px + ox + rand(-3, 3), oy + s); x.stroke(); }); }
+  for (let i = 0; i < 9; i++) { const py = rand(0, s); wrapDraw(x, s, (ox, oy) => { x.strokeStyle = 'rgba(60,60,60,.35)'; x.lineWidth = rand(1, 2.2); x.beginPath(); x.moveTo(ox, py + oy); x.bezierCurveTo(ox + s * 0.3, py + oy + rand(-6, 6), ox + s * 0.6, py + oy + rand(-6, 6), ox + s, py + oy); x.stroke(); }); } // growth rings
+  for (let i = 0; i < 20; i++) { const px = rand(0, s), py = rand(0, s), r = rand(10, 34); wrapDraw(x, s, (ox, oy) => { const gr = x.createRadialGradient(px + ox, py + oy, 0, px + ox, py + oy, r); gr.addColorStop(0, 'rgba(70,70,70,.35)'); gr.addColorStop(1, 'rgba(70,70,70,0)'); x.fillStyle = gr; x.fillRect(px + ox - r, py + oy - r, 2 * r, 2 * r); }); }
+});
+// The lock-on highlight as a rim light: a warm glow only where the surface turns away from the viewer, along the
+// silhouette, so the feathers keep their colour and texture (a flat emissive tint used to wash them out)
+function rimHighlight(mat) {
+  const hl = { value: 0 }; mat.userData.hl = hl; mat.userData.extraKey = 'rim';
+  mat.userData.extraCompile = sh => {
+    sh.uniforms.uHl = hl;
+    sh.fragmentShader = 'uniform float uHl;\n' + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      { float rim = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        totalEmissiveRadiance += vec3(1.0, 0.68, 0.28) * uHl * (pow(rim, 6.0) * 0.22 + 0.008); }`);
+  };
+  return mat;
+}
 function beastMaterials(pal, vc) {
   const o = { vertexColors: vc };
+  const T = (m, tex, sc, bump, str, rv) => triplanarDetail(m, tex, sc, bump, str, rv);
   return {
     // matte, dusty feathers: only a faint, warm sheen at grazing angles, no lacquer
-    plume: phys(pal.plume, 0.9, 0, { ...o, sheen: 0.25, sheenColor: 0x6a6258, sheenRoughness: 0.8, envMapIntensity: 0.4 }),
-    rust: phys(pal.rust, 0.9, 0, { ...o, sheen: 0.2, sheenColor: 0x6a5a4a, sheenRoughness: 0.8, envMapIntensity: 0.4 }),
-    belly: std(pal.belly, 0.95, 0, { ...o, envMapIntensity: 0.4 }),
-    bone: std(0xb8ac94, 0.7, 0, { ...o, envMapIntensity: 0.5 }),
-    scale: std(0x4a3a28, 0.75, 0, { ...o, envMapIntensity: 0.5 }),
-    claw: std(0x1a130d, 0.55, 0, { ...o, envMapIntensity: 0.6 }),
+    plume: rimHighlight(T(phys(pal.plume, 0.9, 0, { ...o, sheen: 0.25, sheenColor: 0x6a6258, sheenRoughness: 0.8, envMapIntensity: 0.4 }), featherTex, 5.5, 1.3, 0.6, 0.25)),
+    rust: rimHighlight(T(phys(pal.rust, 0.9, 0, { ...o, sheen: 0.2, sheenColor: 0x6a5a4a, sheenRoughness: 0.8, envMapIntensity: 0.4 }), featherTex, 6, 1.3, 0.55, 0.25)),
+    belly: rimHighlight(T(std(pal.belly, 0.95, 0, { ...o, envMapIntensity: 0.4 }), featherTex, 8, 0.8, 0.35, 0.2)),   // finer, softer down
+    bone: T(std(0xb8ac94, 0.7, 0, { ...o, envMapIntensity: 0.5 }), beakTex, 9, 0.9, 0.45, 0.3),
+    scale: T(std(0x4a3a28, 0.75, 0, { ...o, envMapIntensity: 0.5 }), leatherTex, 7, 1.3, 0.5, 0.3),            // scaly legs
+    claw: T(std(0x1a130d, 0.55, 0, { ...o, envMapIntensity: 0.6 }), beakTex, 12, 0.9, 0.5, 0.3),
     eye: std(0x221100, 0.4, 0, { emissive: 0xffa21a, emissiveIntensity: 2.4 }),
   };
 }
@@ -2946,7 +2986,7 @@ class Beast {
     // focus highlight (as in medieval-sim): the locked beast glows a soft, breathing gold; the one you'd lock next, fainter
     this.hlv = damp(this.hlv || 0, this.hl || 0, 10, dt);
     const h = this.hlv * (0.7 + 0.3 * Math.sin(time * 6));
-    for (const m of R.flashMats) m.emissive.setRGB(0.6 * f + 0.24 * h, 0.08 * f + 0.15 * h, 0.04 * f + 0.05 * h);
+    for (const m of R.flashMats) { m.emissive.setRGB(0.6 * f, 0.08 * f, 0.04 * f); if (m.userData.hl) m.userData.hl.value = h; } // hit flash; lock-on rim
     const tele = st === 'lungeWind' || st === 'peckWind' ? 1 : 0;
     R.M.eye.emissiveIntensity = damp(R.M.eye.emissiveIntensity, st === 'dead' ? 0 : 2.4 + tele * 5, 10, dt);
   }
