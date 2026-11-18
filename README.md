@@ -15,11 +15,11 @@ The weather changes as you fight. Dry spells and showers take turns: clouds buil
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
 ## Combat
-- **Rhythm combos:** attack, then press again while the blade glints to chain up to six strikes. The timing is forgiving: a press during the cut is remembered and fires as soon as the window opens, and a press just after the swing ends still chains. Only mashing during the wind-up breaks the chain: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. 
+- **Rhythm combos:** attack, then strike again once the cut has landed, when the blade glints, to chain up to six strikes: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. The window lasts through the recovery and a moment after it, so there's time to find the rhythm. Pressing before the cut lands (mashing) breaks the chain and shows TOO EARLY.
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
-- **Lock-on:** on by default while your sword is drawn (Tab toggles it). It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
+- **Lock-on:** on desktop, hold the action key (LMB / E) to lock on, or press Tab to keep the lock on. On phones it's on by default. It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
 - **From behind:** a cut into a beast's back bites deeper, always staggers it, and even stops a charge.
 - **Knock-down:** a charge that hits you clean, without a parry, throws you flat on your back. Press Space (or attack, or W) to get up. You can't be hurt while you're down or getting up.
 - **Reading the beast:** its eyes flare before every strike. It circles, pecks (sometimes twice), crouches and screeches before a charging lunge, and leaps back to break long combos. Later beasts learn to read your wind-up and spring aside, often pecking straight back in, so pick your moments.
@@ -43,7 +43,7 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 | Tab | lock-on |
 | Mouse flick | switch the locked-on beast |
 | R (hold) | look back |
-| H | help |
+| H | show / hide the controls tip (also in the pause menu) |
 | N | music on/off |
 | M | mute all |
 | Esc | pause menu (volume, look sensitivity, brightness, weather, lock-on, restart) |
@@ -55,6 +55,8 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 Click the game to capture the mouse for turning and camera pitch; pull the mouse up past level to drop the camera low and look up into the sky. The mouse wheel zooms.
 
 ## Development
+The icon (`favicon.ico`, `apple-touch-icon.png`, `icon-512.png`) is drawn by [tools/build_icon.py](tools/build_icon.py): `python3 tools/build_icon.py .` (needs Pillow).
+
 See [docs/GAME.md](docs/GAME.md) for how the game is put together. Add `?auto=1` to the URL to skip the title screen. `window.__game` exposes the game state, and `__game.step(seconds)` runs the world without drawing, which makes quick checks easy from the console.
 
 Several mechanics are adapted from the medieval-sim project: sticky, front-weighted lock-on, beasts reading your swings, knock-downs, the weather, the look-back key, strikes landing where you look, raw mouse input, and the debug hooks.
