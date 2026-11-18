@@ -10,6 +10,8 @@ The hero, an original sell-sword, is built the same way by [tools/build_hero.py]
 
 The town around the arena mixes four kinds of house: timber-framed houses, tall gable-fronted townhouses, plank-walled houses with lean-to sheds, and stone cottages. Their roofs are clay tile, slate, wooden shingle or thatch, built course by course from individual tiles that stand proud of the course below, with uneven, sagging lines. Plaster, stone, wood and iron are darkened and weathered with soot streaks, damp, moss and rust. Two stretches of the arena palisade and its gate have been rebuilt in stone. Neighbouring houses never share a type, roof covering or plaster. The stone is a matched set of colour, normal and roughness maps: the mortar is sunken and dead matte, every block has its own sheen, and wet streaks are slick. Slate and clay roofs get the same treatment from their tile textures, and the hero's steel carries a scratched, smudged roughness texture, so reflections break up across every surface. The arena floor is churned with mud and old stains, has puddles in its hollows, and is littered with straw and spent arrows, some stuck in the sand and the palisade.
 
+The weather changes as you fight. Dry spells and showers take turns: clouds build into a grey lid, the sun is buried, the haze closes in and the light goes flat. Then rain slants across the stockade and splashes in the sand, the ground, stone and timber darken and turn slick, and the barrier strikes more often. Afterwards everything dries out slowly. The pause menu can also hold it dry or keep it raining.
+
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
 ## Combat
@@ -17,8 +19,10 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
-- **Lock-on:** on by default while your sword is drawn (Tab toggles it).
-- **Reading the beast:** its eyes flare before every strike. It circles, pecks (sometimes twice), crouches and screeches before a charging lunge, and leaps back to break long combos.
+- **Lock-on:** on by default while your sword is drawn (Tab toggles it). It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
+- **From behind:** a cut into a beast's back bites deeper, always staggers it, and even stops a charge.
+- **Knock-down:** a charge that hits you clean, without a parry, throws you flat on your back. Press Space (or attack, or W) to get up. You can't be hurt while you're down or getting up.
+- **Reading the beast:** its eyes flare before every strike. It circles, pecks (sometimes twice), crouches and screeches before a charging lunge, and leaps back to break long combos. Later beasts learn to read your wind-up and spring aside, often pecking straight back in, so pick your moments.
 - **Rounds:** each round adds tougher and more numerous beasts.
 
 ## Controls
@@ -31,11 +35,18 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 | F | draw / sheathe |
 | LMB / J | attack |
 | RMB / K | parry |
-| Space | step back |
+| Space | step back; get up when knocked down |
 | Tab | lock-on |
+| Mouse flick | switch the locked-on beast |
+| R (hold) | look back |
 | H | help |
 | N | music on/off |
 | M | mute all |
-| Esc | pause menu (volume, mouse sensitivity, lock-on, restart) |
+| Esc | pause menu (volume, mouse sensitivity, brightness, weather, lock-on, restart) |
 
 Click the game to capture the mouse for turning and camera pitch; pull the mouse up past level to drop the camera low and look up into the sky. The mouse wheel zooms.
+
+## Development
+See [docs/GAME.md](docs/GAME.md) for how the game is put together. Add `?auto=1` to the URL to skip the title screen. `window.__game` exposes the game state, and `__game.step(seconds)` runs the world without drawing, which makes quick checks easy from the console.
+
+Several mechanics are adapted from the medieval-sim project: sticky, front-weighted lock-on, beasts reading your swings, knock-downs, the weather, the look-back key, strikes landing where you look, raw mouse input, and the debug hooks.
