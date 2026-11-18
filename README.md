@@ -19,7 +19,7 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
-- **Lock-on:** on by default while your sword is drawn (Tab toggles it). It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
+- **Lock-on:** on desktop, hold the action key (LMB / E) to lock on, or press Tab to keep the lock on. On phones it's on by default. It stays on the same beast until that beast falls, and a gold chevron marks it. Flick the mouse left or right to switch to the next beast on that side.
 - **From behind:** a cut into a beast's back bites deeper, always staggers it, and even stops a charge.
 - **Knock-down:** a charge that hits you clean, without a parry, throws you flat on your back. Press Space (or attack, or W) to get up. You can't be hurt while you're down or getting up.
 - **Reading the beast:** its eyes flare before every strike. It circles, pecks (sometimes twice), crouches and screeches before a charging lunge, and leaps back to break long combos. Later beasts learn to read your wind-up and spring aside, often pecking straight back in, so pick your moments.

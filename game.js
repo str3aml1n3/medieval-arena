@@ -2448,7 +2448,8 @@ class Beast {
 }
 
 // ============================================================ combat glue
-let hitStop = 0, slowMo = 0, shake = 0, time = 0, lockOn = true;
+// Lock-on with the sword drawn: off by default on desktop (hold LMB / E, or press Tab, to lock); on by default on touch.
+let hitStop = 0, slowMo = 0, shake = 0, time = 0, lockOn = TOUCH;
 const vignette = document.getElementById('vignette');
 let vignetteA = 0;
 
@@ -2894,8 +2895,8 @@ try { Object.assign(settings, JSON.parse(localStorage.getItem('arena-settings') 
 // brightness (like medieval-sim's): scales the tone-mapping exposure, so it lifts the gloom without washing out the sky
 const applyBright = () => { renderer.toneMappingExposure = 0.9 * settings.bright; };
 applyBright();
-const saveSettings = () => { try { localStorage.setItem('arena-settings', JSON.stringify({ ...settings, music: Music.volume, lockOn })); } catch (e) { /* ignore */ } };
-try { const st = JSON.parse(localStorage.getItem('arena-settings') || '{}'); if (typeof st.lockOn === 'boolean') lockOn = st.lockOn; if (typeof st.music === 'number') Music.setVolume(st.music); } catch (e) { /* ignore */ }
+const saveSettings = () => { try { localStorage.setItem('arena-settings', JSON.stringify({ ...settings, music: Music.volume, lockOn, lockV: 2 })); } catch (e) { /* ignore */ } };
+try { const st = JSON.parse(localStorage.getItem('arena-settings') || '{}'); if (typeof st.lockOn === 'boolean' && st.lockV === 2) lockOn = st.lockOn; /* older saves stored the old always-on default */ if (typeof st.music === 'number') Music.setVolume(st.music); } catch (e) { /* ignore */ }
 let paused = false, resumeGuard = 0;
 const canPause = () => (game.state === 'play' || game.state === 'between') && $('overlay').classList.contains('hidden');
 function pauseGame() {

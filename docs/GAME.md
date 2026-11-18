@@ -61,7 +61,7 @@ names). Animation is procedural:
 - **Arena floor:** `arenaPatches(x, z)` gives the gravel, green and track weights that tint the floor and place those tufts.
 
 ## Lock-on
-Lock-on is on by default while the sword is drawn (Tab toggles it), and holding the action key locks on too. The locked beast glows a soft, breathing gold, and the beast you would lock next glows fainter (`Beast.hl`). The lock is **sticky**: `lockTarget` stays on one
+On desktop, lock-on is off by default: holding the action key locks on, and Tab keeps it on. On touch devices it's on by default, and always on in portrait. The locked beast glows a soft, breathing gold, and the beast you would lock next glows fainter (`Beast.hl`). The lock is **sticky**: `lockTarget` stays on one
 beast until that beast dies or is more than 15 m away. It doesn't jump to whichever beast is nearest this frame. A new
 lock goes to the beast with the lowest `distance × (2.2 − facing)` score, which means the nearest beast roughly in
 front (the scoring comes from medieval-sim's `acquireLock`). While locked, the mouse doesn't turn the hero; a quick
