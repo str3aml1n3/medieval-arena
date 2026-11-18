@@ -17,8 +17,13 @@ const ARENA_R = 17.2;
 const STAND_TIERS = [[20.3, 5.0], [21.7, 6.2]];
 
 // ============================================================ renderer / scene
-const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// phones and tablets: touch controls, and a lighter start (lower resolution, smaller shadow map); the resolution then
+// adapts to the frame rate on every device (see `adaptResolution`)
+const TOUCH = matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0;
+const renderer = new THREE.WebGLRenderer({ antialias: !TOUCH, powerPreference: 'high-performance' }); // on dual-GPU laptops, ask for the fast one
+const MAX_PR = Math.min(devicePixelRatio, TOUCH ? 1.5 : 2);
+let pixelRatio = MAX_PR;
+renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -275,7 +280,7 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffeccc, 2.75);
 sun.position.copy(SUN_DIR).multiplyScalar(60);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(TOUCH ? 1024 : 2048, TOUCH ? 1024 : 2048);
 Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 140 });
 sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
 scene.add(sun);
@@ -2332,7 +2337,10 @@ class Beast {
     R.root.rotation.y = this.yaw;
     if (st === 'dead') { R.root.rotation.z = damp(R.root.rotation.z, this.dieRoll, 4, dt); R.root.position.y = groundH(this.pos.x, this.pos.z) + 0.55 * this.s; }
     const f = this.flash > 0 ? this.flash / 0.12 : 0;
-    for (const m of R.flashMats) m.emissive.setRGB(0.6 * f, 0.08 * f, 0.04 * f);
+    // focus highlight (as in medieval-sim): the locked beast glows a soft, breathing gold; the one you'd lock next, fainter
+    this.hlv = damp(this.hlv || 0, this.hl || 0, 10, dt);
+    const h = this.hlv * (0.7 + 0.3 * Math.sin(time * 6));
+    for (const m of R.flashMats) m.emissive.setRGB(0.6 * f + 0.24 * h, 0.08 * f + 0.15 * h, 0.04 * f + 0.05 * h);
     const tele = st === 'lungeWind' || st === 'peckWind' ? 1 : 0;
     R.M.eye.emissiveIntensity = damp(R.M.eye.emissiveIntensity, st === 'dead' ? 0 : 2.4 + tele * 5, 10, dt);
   }
@@ -2362,7 +2370,7 @@ function acquireLock() {
   return best;
 }
 function currentTarget() {
-  if (!P.drawn || !lockOn || P.state === 'dead') { lockTarget = null; return null; }
+  if (!P.drawn || !(lockOn || actionHeld()) || P.state === 'dead') { lockTarget = null; return null; }
   if (!lockable(lockTarget)) lockTarget = acquireLock();
   return lockTarget;
 }
@@ -2444,7 +2452,7 @@ function startAttack(step, lf, rt, target) {
   if (step < 3) { if (lf) type = 'rl'; else if (rt) type = 'lr'; }
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
-  P.swingId++;
+  P.swingId++; P.queued = null; P.chainGrace = 0;
   P.hitSet.clear();
   const sp = Math.max(0.72, Math.pow(0.93, step)) * (sw.slow || 1);
   P.times = { w: 0.21 * sp * (sw.wMul || 1), a: 0.11 * sp * (sw.aMul || 1), r: 0.42 * sp };
@@ -2460,14 +2468,20 @@ function updatePlayer(dt) {
   P.iframes = Math.max(0, P.iframes - dt); P.stDelay -= dt;
   P.comboT -= dt; if (P.comboT <= 0) P.combo = 0;
   flickCd -= dt; flickX *= Math.exp(-10 * dt); // a flick has to be quick, slow drift doesn't add up
-  const fw = keys.KeyW || keys.ArrowUp, bw = keys.KeyS || keys.ArrowDown;
-  const lf = keys.KeyA || keys.ArrowLeft, rt = keys.KeyD || keys.ArrowRight;
-  const sl = keys.KeyQ, sr = keys.KeyE;
-  const wantAttack = pressed.has('Attack') || pressed.has('KeyJ');
-  const wantBlock = mouseR || keys.KeyK;
-  const wantDraw = pressed.has('KeyF') || pressed.has('Digit1');
+  P.chainGrace = (P.chainGrace || 0) - dt;
+  const js = touch.stick; // the on-screen joystick (phones), x/y in -1..1, y < 0 = forward
+  // action key (left mouse or E, as in medieval-sim): while it is held with the sword out, W A D strike forward / left /
+  // right and S guards, instead of moving
+  const act = actionHeld() && (P.drawn || P.state === 'draw');
+  const kf = !act && (keys.KeyW || keys.ArrowUp), kb = !act && (keys.KeyS || keys.ArrowDown);
+  const kl = !act && (keys.KeyA || keys.ArrowLeft), kr = !act && (keys.KeyD || keys.ArrowRight);
+  const fw = kf || js.y < -0.5, bw = kb || js.y > 0.5, lf = kl || js.x < -0.5, rt = kr || js.x > 0.5;
+  const wantAttack = pressed.has('Attack') || pressed.has('KeyJ') || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR');
+  const swL = pressed.has('AtkL') || (lf && !pressed.has('AtkF') && !pressed.has('AtkR')), swR = pressed.has('AtkR') || (rt && !pressed.has('AtkF') && !pressed.has('AtkL'));
+  const wantBlock = mouseR || keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
+  const wantDraw = pressed.has('KeyF') || pressed.has('Digit1') || pressed.has('Draw');
   const wantDodge = pressed.has('Space');
-  const sprint = keys.ShiftLeft || keys.ShiftRight;
+  const sprint = keys.ShiftLeft || keys.ShiftRight || Math.hypot(js.x, js.y) > 0.95;
   const canAct = game.state === 'play' || game.state === 'between';
   let tp = null, k = 14;
   const fwdV = new V3(Math.sin(P.yaw), 0, Math.cos(P.yaw));
@@ -2486,13 +2500,23 @@ function updatePlayer(dt) {
     case 'block': {
       if (!canAct) { tp = P.drawn ? POSE.stance : POSE.relaxed; break; }
       if (wantDraw) { startDraw(); break; }
-      if (wantAttack) { if (!P.drawn) { startDraw(); break; } if (P.st >= 6) { startAttack(0, lf, rt, target); break; } }
+      if (wantAttack) {
+        if (!P.drawn) { startDraw(); break; }
+        // a strike right after the last one finished still chains (a forgiving late window)
+        const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
+        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
+      }
       if (wantDodge && P.drawn && P.st >= 18) { startDodge(); break; }
       P.state = wantBlock && P.drawn ? 'block' : 'idle';
       let turn = 0, f = 0, s = 0;
-      if (fw) f += 1; if (bw) f -= 0.65;
-      if (target) { if (lf) s -= 1; if (rt) s += 1; } else { if (lf) turn += 1; if (rt) turn -= 1; }
-      if (sl) s -= 1; if (sr) s += 1;
+      if (js.active) { // analog: how far the stick is pushed sets the speed
+        const dz = v => (Math.abs(v) < 0.15 ? 0 : v);
+        f = -dz(js.y) * (js.y > 0 ? 0.65 : 1);
+        if (target) s = dz(js.x); else turn = -dz(js.x) * 0.8;
+      } else {
+        if (fw) f += 1; if (bw) f -= 0.65;
+        if (target) { if (lf) s -= 1; if (rt) s += 1; } else { if (lf) turn += 1; if (rt) turn -= 1; }
+      }
       P.yaw += turn * 2.9 * dt;
       if (target) P.yaw = dampAng(P.yaw, yawTo(P.pos, target.pos), 9, dt);
       let speed = P.drawn ? (sprint ? 4.8 : 3.5) : (sprint ? 6.8 : 4.4);
@@ -2517,14 +2541,19 @@ function updatePlayer(dt) {
     }
     case 'attack': {
       P.t += dt;
-      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a + 0.02;
+      const { w, a, r } = P.times, tot = w + a + r, winStart = w + a;
+      // Chaining is forgiving: a press during the cut itself is remembered and fires the moment the window opens; only
+      // mashing during the wind-up breaks the chain. The window runs to the end of the recovery, plus a short grace
+      // after it (see `chainGrace` in idle).
       if (wantAttack && P.step < COMBO.length - 1) {
-        if (P.t >= winStart && !P.failed && P.st >= 4) {
-          const late = (P.t - winStart) / (tot - winStart);
-          popText(hero.swordTip.getWorldPosition(new V3()), late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
-          startAttack(P.step + 1, lf, rt, target);
-          break;
-        } else if (P.t < winStart) P.failed = true;
+        if (P.t < w * 0.8) P.failed = true;
+        else if (!P.failed) P.queued = { l: swL, r: swR, at: P.t };
+      }
+      if (P.queued && !P.failed && P.t >= winStart && P.st >= 4) {
+        const q = P.queued, late = (P.t - winStart) / (tot - winStart);
+        popText(hero.swordTip.getWorldPosition(new V3()), q.at < winStart || late < 0.4 ? 'PERFECT' : 'GOOD', 'timing');
+        startAttack(P.step + 1, q.l, q.r, target);
+        break;
       }
       if (wantDodge && P.t > w + a && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
       if (!P.swungSound && P.t >= w * 0.7) { SFX.swing(P.step); P.swungSound = true; }
@@ -2549,10 +2578,10 @@ function updatePlayer(dt) {
       tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
       if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
       k = 30;
-      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart;
+      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.08;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
-      if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); }
+      if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); if (!P.failed) { P.chainGrace = 0.3; P.lastStep = P.step; } }
       break;
     }
     case 'dodge': {
@@ -2751,6 +2780,7 @@ function showOverlay(html) {
 }
 function begin() {
   initAudio();
+  goFullscreen();
   $('overlay').classList.add('hidden');
   resetGame();
   lockPointer();
@@ -2770,7 +2800,7 @@ const canPause = () => (game.state === 'play' || game.state === 'between') && $(
 function pauseGame() {
   if (paused || !canPause()) return;
   paused = true;
-  for (const k in keys) keys[k] = false; mouseR = false;
+  for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; touch.reset?.();
   $('optMusic').value = Music.volume; $('optSound').value = settings.sound; $('optSens').value = settings.sens; $('optLock').checked = lockOn;
   $('optBright').value = settings.bright; $('optWeather').value = settings.weather;
   $('pause').classList.remove('hidden');
@@ -2805,9 +2835,34 @@ document.addEventListener('visibilitychange', () => {
 
 // ============================================================ input
 const keys = {}; const pressed = new Set(); let mouseR = false;
+// The action key (medieval-sim's modern scheme): left mouse or E. Holding it locks on to the beast in front; with the
+// sword out, W / A / D then strike forward / left / right (press again to chain) and S guards. Pressing it while a
+// direction is already held strikes at once. A quick click on its own also strikes forward.
+let mouseL = false, actT = 0, actUsed = false;
+const actionHeld = () => mouseL || !!keys.KeyE;
+const ACT_DIRS = { KeyW: 'AtkF', ArrowUp: 'AtkF', KeyA: 'AtkL', ArrowLeft: 'AtkL', KeyD: 'AtkR', ArrowRight: 'AtkR' };
+function actionPress() {
+  if (actionHeld()) return; // the other action input is already down
+  actT = performance.now(); actUsed = false;
+  const held = Object.keys(ACT_DIRS).find(k => keys[k]);
+  if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
+}
+function actionRelease() {
+  if (actionHeld()) return;
+  if (!actUsed && performance.now() - actT < 250 && !(keys.KeyS || keys.ArrowDown)) pressed.add('Attack');
+}
+// Ctrl draws the sword, and browsers never let a page block Ctrl+W: ask before the tab closes mid-fight
+addEventListener('beforeunload', e => { if (game.state === 'play' || game.state === 'between') { e.preventDefault(); e.returnValue = ''; } });
 addEventListener('keydown', e => {
   if (['Tab', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
-  if (!keys[e.code]) pressed.add(e.code);
+  if (e.ctrlKey && game.state !== 'title' && !paused) e.preventDefault(); // Ctrl+S, Ctrl+D… (Ctrl+W can't be stopped)
+  if (!keys[e.code]) {
+    pressed.add(e.code);
+    if (e.code === 'KeyE' && !paused) actionPress();
+    if (ACT_DIRS[e.code] && actionHeld() && (P.drawn || P.state === 'draw')) { pressed.add(ACT_DIRS[e.code]); actUsed = true; }
+    if (e.code === 'KeyS' && actionHeld()) actUsed = true;
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') pressed.add('Draw');
+  }
   keys[e.code] = true;
   if (e.code === 'Escape') { if (paused) resumeGame(); else pauseGame(); return; }
   if (paused) return;
@@ -2816,28 +2871,32 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : settings.sound;
   if (e.code === 'KeyN') Music.toggle();
 });
-addEventListener('keyup', e => { keys[e.code] = false; });
-addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; });
+addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'KeyE') actionRelease(); });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; });
 renderer.domElement.addEventListener('mousedown', e => {
   if (game.state === 'title' || paused) return;
   if (document.pointerLockElement !== renderer.domElement) lockPointer();
-  if (e.button === 0) pressed.add('Attack');
+  if (e.button === 0) { actionPress(); mouseL = true; }
   if (e.button === 2) mouseR = true;
   if (e.button === 1) { lockOn = !lockOn; e.preventDefault(); }
 });
-addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; });
+addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; if (e.button === 0 && mouseL) { mouseL = false; actionRelease(); } });
 addEventListener('contextmenu', e => e.preventDefault());
 let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8, lookBack = false;
 addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
   const mx = e.movementX, my = e.movementY;
   if (Math.abs(mx) > 300 || Math.abs(my) > 300) return; // Chrome on Windows sometimes reports huge bogus jumps under pointer lock
+  look(mx, my);
+});
+// mouse (and the touch look-pad): turns the hero and tilts the camera; locked on, a quick sideways flick switches beast
+function look(mx, my) {
   if (currentTarget()) { // locked on: the mouse doesn't turn the hero, but a quick flick switches target
     flickX += mx * settings.sens;
     if (Math.abs(flickX) > 140 && flickCd <= 0) { if (switchTarget(Math.sign(flickX))) flickCd = 0.35; flickX = 0; }
   } else if (!isDown() && P.state !== 'attack') P.yaw -= mx * 0.0024 * settings.sens;
   camPitch = clamp(camPitch + my * 0.0018 * settings.sens, -0.75, 0.85);
-});
+}
 // raw (unaccelerated) mouse deltas where the browser supports them, so turning doesn't depend on OS mouse acceleration
 function lockPointer() {
   const el = renderer.domElement;
@@ -2845,6 +2904,70 @@ function lockPointer() {
   catch (e) { try { el.requestPointerLock?.(); } catch (e2) { /* not allowed right now */ } }
 }
 addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) * 0.4, 2.8, 9); }, { passive: true });
+
+// ---- touch controls: a floating joystick under the left thumb, a look-pad for the right thumb (drag turns the hero and
+// tilts the camera; locked on, a quick sideways flick switches beast), and buttons for strike, parry, step back, draw,
+// lock-on and pause. They show on phones and tablets, and on any device the moment it is touched.
+const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: false };
+(function touchControls() {
+  const pad = $('tpad'), stick = $('stick'), knob = $('knob'), R = 55;
+  let stickId = null, lookId = null, sx = 0, sy = 0, lx = 0, ly = 0;
+  function enable() { if (touch.enabled) return; touch.enabled = true; document.body.classList.add('touch'); }
+  if (TOUCH) enable();
+  addEventListener('touchstart', enable, { passive: true, capture: true });
+  const playing = () => !paused && game.state !== 'title';
+  pad.addEventListener('touchstart', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.clientX < innerWidth * 0.45 && stickId === null) {
+        stickId = t.identifier; sx = t.clientX; sy = t.clientY;
+        stick.style.left = sx + 'px'; stick.style.top = sy + 'px'; stick.classList.add('on');
+        knob.style.transform = ''; touch.stick.active = true; touch.stick.x = touch.stick.y = 0;
+      } else if (lookId === null) { lookId = t.identifier; lx = t.clientX; ly = t.clientY; }
+    }
+  }, { passive: false });
+  pad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) {
+        let dx = t.clientX - sx, dy = t.clientY - sy; const l = Math.hypot(dx, dy);
+        if (l > R) { dx *= R / l; dy *= R / l; }
+        knob.style.transform = `translate(${dx}px,${dy}px)`;
+        touch.stick.x = dx / R; touch.stick.y = dy / R;
+      } else if (t.identifier === lookId) {
+        if (playing()) look((t.clientX - lx) * 2.2, (t.clientY - ly) * 1.6);
+        lx = t.clientX; ly = t.clientY;
+      }
+    }
+  }, { passive: false });
+  const end = e => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) { stickId = null; stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); }
+      if (t.identifier === lookId) lookId = null;
+    }
+  };
+  pad.addEventListener('touchend', end); pad.addEventListener('touchcancel', end);
+  // buttons: tap actions go through the same `pressed` set as the keyboard; parry is held
+  const btn = (id, down, up) => {
+    const el = $(id);
+    el.addEventListener('touchstart', e => { e.preventDefault(); e.stopPropagation(); el.classList.add('down'); if (playing() || id === 'bPause') down(); }, { passive: false });
+    const rel = e => { e.preventDefault(); el.classList.remove('down'); up?.(); };
+    el.addEventListener('touchend', rel); el.addEventListener('touchcancel', rel);
+  };
+  btn('bAtk', () => pressed.add('Attack'));
+  btn('bDodge', () => pressed.add('Space'));
+  btn('bDraw', () => pressed.add('KeyF'));
+  btn('bParry', () => { touch.parry = true; }, () => { touch.parry = false; });
+  btn('bLock', () => { lockOn = !lockOn; saveSettings(); });
+  btn('bPause', () => { if (paused) resumeGame(); else pauseGame(); });
+  touch.reset = () => { stickId = lookId = null; stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); touch.parry = false; };
+})();
+// on a phone, going full screen (and sideways, where the browser allows it) gives the arena the whole display
+function goFullscreen() {
+  if (!touch.enabled || document.fullscreenElement) return;
+  const el = document.documentElement;
+  try { el.requestFullscreen?.({ navigationUI: 'hide' })?.then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {}); } catch (e) { /* not allowed */ }
+}
 
 // ============================================================ camera / hud / pops
 const pops = [];
@@ -2896,7 +3019,7 @@ function updateHUD(dt) {
   $('php').querySelector('.fill').style.transform = `scaleX(${P.hp / P.maxHp})`;
   $('php').querySelector('.ghost').style.transform = `scaleX(${P.ghostHp / P.maxHp})`;
   $('pst').querySelector('.fill').style.transform = `scaleX(${Math.max(0, P.st) / P.maxSt})`;
-  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : 'UNARMED — PRESS F';
+  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : (touch.enabled ? 'UNARMED — TAP DRAW' : 'UNARMED — PRESS CTRL');
   const tgt = currentTarget() || beasts.find(e => !e.dead && e.state !== 'wait');
   const eb = $('ebox');
   if (tgt && game.state !== 'title') {
@@ -2907,6 +3030,8 @@ function updateHUD(dt) {
     $('ename').textContent = tgt.name;
   } else eb.style.opacity = 0;
   // a small gold chevron over the locked beast's head
+  if (touch.enabled) $('touch').style.visibility = game.state === 'title' || !$('overlay').classList.contains('hidden') ? 'hidden' : '';
+  if (touch.enabled) { $('bLock').classList.toggle('lit', lockOn); $('bDraw').textContent = P.drawn ? 'SHEATHE' : 'DRAW'; }
   const lm = $('lockmark'), lt = currentTarget();
   if (lt && game.state !== 'title') {
     const v = tmpV2.set(lt.pos.x, groundH(lt.pos.x, lt.pos.z) + 2.6 * lt.s, lt.pos.z).project(camera);
@@ -2960,11 +3085,29 @@ function drawFrame() {
   renderer.shadowMap.needsUpdate = true;
   renderer.autoClear = false; renderer.render(scene, camera); renderer.autoClear = true;
 }
+// Dynamic resolution: almost all the frame time is pixel shading, so when the frame rate sags (a phone, a weak laptop)
+// the render resolution steps down, and it steps back up when there is headroom. Judged over 2-second windows.
+let prevNow = performance.now(), frWin = 0, frN = 0, frCool = 3;
+function adaptResolution(fdt) {
+  if (!(fdt > 0) || fdt > 0.5) return; // tab switches, hitches
+  frWin += fdt; frN++; frCool -= fdt;
+  if (frWin < 2) return;
+  const fps = frN / frWin; frWin = 0; frN = 0;
+  if (frCool > 0) return;
+  let pr = pixelRatio;
+  if (fps < 40 && pr > 0.6) pr = Math.max(0.6, pr - (fps < 25 ? 0.25 : 0.125));
+  else if (fps > 57 && pr < MAX_PR) pr = Math.min(MAX_PR, pr + 0.125);
+  if (pr === pixelRatio) return;
+  pixelRatio = pr; renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight);
+  for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
+  frCool = 4;
+}
 function loop(now) {
   requestAnimationFrame(loop);
   const rdt = Math.min(0.05, (now - last) / 1000); last = now;
   if (paused) { Weather.silence(); drawFrame(); pressed.clear(); return; }
   tick(rdt);
+  adaptResolution((now - prevNow) / 1000); prevNow = now;
   drawFrame();
   pressed.clear();
 }
@@ -2977,6 +3120,8 @@ function tick(rdt) {
 
   if (game.state !== 'title') {
     updatePlayer(dt);
+    const tg = currentTarget(), cand = !tg && P.drawn && P.state !== 'dead' ? acquireLock() : null;
+    for (const e of beasts) e.hl = e === tg ? 1 : e === cand ? 0.45 : 0;
     if (!window.__freezeAI) for (const e of beasts) e.update(dt);
     separate();
     if (game.state === 'between') {

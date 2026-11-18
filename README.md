@@ -15,7 +15,7 @@ The weather changes as you fight. Dry spells and showers take turns: clouds buil
 Everything else is generated at runtime with [three.js](https://threejs.org): the other models are built from primitives, the textures are drawn on canvas, and the sounds are synthesized with the Web Audio API. The music is an original, slow and dark piece in D minor with Phrygian colour (62 BPM), written as MIDI note data and played with sampled General MIDI instruments: string ensemble, choir, pizzicato, harp, tubular bells, nylon guitar (standing in for a lute), French horn, trumpet, recorder, timpani, taiko war drums and toms. The samples come from the FluidR3_GM SoundFont (CC-BY 3.0) via [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts). The music gets more intense during fights. There are no external art or audio assets.
 
 ## Combat
-- **Rhythm combos:** attack, then press again while the blade glints to chain up to six strikes: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. If you press too early the chain breaks.
+- **Rhythm combos:** attack, then press again while the blade glints to chain up to six strikes. The timing is forgiving: a press during the cut is remembered and fires as soon as the window opens, and a press just after the swing ends still chains. Only mashing during the wind-up breaks the chain: a chop, two cross-cuts, a weaving double cut (down to the left, the blade rolls over, down to the right — it can land twice), a turn-around strike (a full spin that cuts everything around you), then a heavy overhead. 
 - **Directional swings:** hold A or D while attacking.
 - **Parry:** right mouse. Stops pecks and staggers the beast. The charge drains a lot of stamina and can break your guard.
 - **Step back:** Space. Gives brief invulnerability and can cancel your swing recovery.
@@ -26,14 +26,18 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Rounds:** each round adds tougher and more numerous beasts.
 
 ## Controls
+The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking.
+
 | Key | Action |
 |---|---|
 | W / S | forward / back |
 | A / D | turn (strafe when locked on) |
-| Q / E | strafe |
 | Shift | run |
-| F | draw / sheathe |
-| LMB / J | attack |
+| Ctrl / F | draw / sheathe |
+| LMB / E (hold) | action key: locks on to the beast in front while held |
+| action + W / A / D | strike forward / left / right (press again to chain) |
+| action + S | guard |
+| click LMB / tap E, J | quick forward strike |
 | RMB / K | parry |
 | Space | step back; get up when knocked down |
 | Tab | lock-on |
@@ -42,7 +46,9 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 | H | help |
 | N | music on/off |
 | M | mute all |
-| Esc | pause menu (volume, mouse sensitivity, brightness, weather, lock-on, restart) |
+| Esc | pause menu (volume, look sensitivity, brightness, weather, lock-on, restart) |
+
+**On a phone or tablet** (hold it sideways), touch controls appear: a joystick under your left thumb and a look-pad for your right (drag to look, flick to switch beast), plus STRIKE, PARRY, STEP, DRAW, LOCK and pause buttons. The game goes full screen when you enter the arena. Resolution adapts to the frame rate on every device, so slower phones and laptops stay smooth.
 
 Click the game to capture the mouse for turning and camera pitch; pull the mouse up past level to drop the camera low and look up into the sky. The mouse wheel zooms.
 

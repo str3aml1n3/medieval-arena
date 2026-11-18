@@ -47,8 +47,14 @@ names). Animation is procedural:
 | `getup` | 0.5 s rising crouch, still untouchable. |
 | `dead` | Thrashes, then lies still. |
 
+## Input
+- **Keyboard and mouse:** the action key works as in medieval-sim. `actionHeld()` is true while left mouse or E is down. It locks on, and with the sword out it turns W / A / D into strikes (`AtkF` / `AtkL` / `AtkR` in `pressed`) and S into a guard; holding a direction when the action key goes down strikes at once. A quick click on its own (under 250 ms, no direction) is a forward strike. Ctrl or F draws the sword. `beforeunload` asks before the tab closes mid-fight, because Ctrl+W can't be blocked.
+- **Touch** (`touch`): shown on coarse-pointer devices and as soon as the screen is touched. A floating joystick on the left 45 % of the screen feeds `touch.stick`, which is analog: the speed follows how far the stick is pushed, and pushing it to the rim runs. The rest of the screen is a look-pad that calls the same `look()` as the mouse. The buttons feed `pressed` the same way the keyboard does. On short screens the menus tighten, and in portrait a rotate hint covers the game.
+- **Chaining:** a press after 80 % of the wind-up is queued (`P.queued`) and fires as the window opens. The window lasts until the end of the recovery, and `chainGrace` adds 0.3 s after it. Only a press early in the wind-up breaks the chain.
+- **Dynamic resolution** (`adaptResolution`): the frame rate is measured over 2 s windows. Below 40 fps the pixel ratio steps down to as low as 0.6, and above 57 fps it steps back up to the cap (2, or 1.5 on touch devices, which also start with a 1024 shadow map and no MSAA).
+
 ## Lock-on
-Lock-on is on by default while the sword is drawn (Tab toggles it). The lock is **sticky**: `lockTarget` stays on one
+Lock-on is on by default while the sword is drawn (Tab toggles it), and holding the action key locks on too. The locked beast glows a soft, breathing gold, and the beast you would lock next glows fainter (`Beast.hl`). The lock is **sticky**: `lockTarget` stays on one
 beast until that beast dies or is more than 15 m away. It doesn't jump to whichever beast is nearest this frame. A new
 lock goes to the beast with the lowest `distance × (2.2 − facing)` score, which means the nearest beast roughly in
 front (the scoring comes from medieval-sim's `acquireLock`). While locked, the mouse doesn't turn the hero; a quick
