@@ -1748,6 +1748,7 @@ const Weather = (() => {
   return {
     wx, update, initAudio,
     silence() { setLevel(0); },
+    warm(on) { lines.visible = on; if (on) geo.setDrawRange(0, 0); else geo.setDrawRange(0, Infinity); }, // compile the rain's shader at load
     get rain() { return wx.rain; },
     get agitation() { return clamp(wx.cloud * 0.45 + wx.rain * 0.55, 0, 1); }, // how disturbed the barrier is
   };
@@ -3927,23 +3928,75 @@ function drawFrame() {
   renderer.autoClear = false; renderer.render(scene, camera); renderer.autoClear = true;
   Shafts.render();
 }
-// Dynamic resolution: almost all the frame time is pixel shading, so when the frame rate sags (a phone, a weak laptop)
-// the render resolution steps down, and it steps back up when there is headroom. Judged over 2-second windows.
+// ---- dynamic resolution, v2
+// The first version averaged the frame rate over 2 s and stepped down below 50 fps. That misfired: one hitch in a window
+// (the sky reflection being re-taken as clouds roll in, a shader compiled the first time rain falls) dragged the average
+// under the line; a browser capping the frame rate (battery saver, a 50 Hz screen, a background tab) looked exactly like
+// a slow GPU; and it only stepped back up above 58 fps, which a 60 Hz screen with a little jitter rarely reports.
+// Now:
+//  · where the browser offers GPU timer queries (EXT_disjoint_timer_query_webgl2), the decision is made on the GPU's own
+//    time per frame: shrink only if the GPU can't draw the frame in ~14 ms, grow back while there's room at the next step;
+//  · without them, on the median frame time (hitches don't count), and only after two slow windows in a row;
+//  · a frame rate pinned at a cap with an idle GPU never shrinks the picture.
+// ?perf=1 or F3 shows a readout: fps, frame and GPU times, resolution, weather, and the scaler's last decision.
 let daylightT = 0;
-let prevNow = performance.now(), frWin = 0, frN = 0, frCool = 3;
-function adaptResolution(fdt) {
-  if (!(fdt > 0) || fdt > 0.5 || window.__noAdapt) return; // tab switches, hitches (debug: __noAdapt holds it)
-  frWin += fdt; frN++; frCool -= fdt;
-  if (frWin < 2) return;
-  const fps = frN / frWin; frWin = 0; frN = 0;
-  if (frCool > 0) return;
-  let pr = pixelRatio;
-  if (fps < 50 && pr > 0.5) pr = Math.max(0.5, pr - (fps < 30 ? 0.25 : 0.125));
-  else if (fps > 58 && pr < MAX_PR) pr = Math.min(MAX_PR, pr + 0.125);
-  if (pr === pixelRatio) return;
+let prevNow = performance.now(), frCool = 3, slowWins = 0;
+const frTimes = [], gpuTimes = [];
+const RES = { last: 'start', gpu: null, fps: 0, frameMs: 0 };
+const median = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
+const GPUT = (() => { // GPU frame timing, if the browser offers it
+  const gl = renderer.getContext(), ext = gl.getExtension && gl.getExtension('EXT_disjoint_timer_query_webgl2');
+  if (!ext || !gl.createQuery) return null;
+  let open = null; const pending = [];
+  return {
+    begin() { if (open || pending.length > 4) return; open = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, open); },
+    end() { if (!open) return; gl.endQuery(ext.TIME_ELAPSED_EXT); pending.push(open); open = null; },
+    poll() {
+      while (pending.length && gl.getQueryParameter(pending[0], gl.QUERY_RESULT_AVAILABLE)) {
+        const q = pending.shift(), ok = !gl.getParameter(ext.GPU_DISJOINT_EXT);
+        if (ok) gpuTimes.push(gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6);
+        gl.deleteQuery(q);
+      }
+      if (gpuTimes.length > 240) gpuTimes.splice(0, gpuTimes.length - 240);
+    },
+  };
+})();
+function setRes(pr, why) {
   pixelRatio = pr; renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight);
   for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
-  frCool = 4;
+  RES.last = why; frCool = 4; frTimes.length = 0; gpuTimes.length = 0;
+  (window.__resLog = window.__resLog || []).push(`${new Date().toLocaleTimeString()} ${pr.toFixed(3)}× ${why}`);
+}
+function adaptResolution(fdt) {
+  GPUT?.poll();
+  if (!(fdt > 0) || fdt > 0.25) return;           // tab switches and one-off hitches don't count
+  frTimes.push(fdt * 1000); frCool -= fdt;
+  if (frTimes.reduce((a, b) => a + b, 0) < 2000) return;
+  const fms = median(frTimes), gms = gpuTimes.length >= 10 ? median(gpuTimes) : null;
+  RES.fps = 1000 / fms; RES.frameMs = fms; RES.gpu = gms; frTimes.length = 0; gpuTimes.length = 0;
+  if (window.__noAdapt || frCool > 0) return;
+  const pr = pixelRatio, upK = ((pr + 0.125) / pr) ** 2;   // pixels cost ~ the square of the ratio
+  if (gms !== null) {                              // decide on the GPU's own time
+    if (gms > 14 && pr > 0.5) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(0.5, pr - (gms > 24 ? 0.25 : 0.125)), `GPU ${gms.toFixed(1)} ms`); } }
+    else { slowWins = 0; if (gms * upK < 11 && pr < MAX_PR) setRes(Math.min(MAX_PR, pr + 0.125), `GPU ${gms.toFixed(1)} ms, room to grow`); }
+    return;
+  }
+  // no GPU timing: the median frame time; a frame rate pinned to a cap (30/50/60 Hz) with no jitter isn't the GPU
+  const capped = [16.67, 20, 33.33].some(c => Math.abs(fms - c) < 0.6);
+  if (fms > 21 && !capped && pr > 0.5) { slowWins++; if (slowWins >= 2) { slowWins = 0; setRes(Math.max(0.5, pr - (fms > 33 ? 0.25 : 0.125)), `frame ${fms.toFixed(1)} ms`); } }
+  else { slowWins = 0; if (fms < 17.5 && pr < MAX_PR) setRes(Math.min(MAX_PR, pr + 0.125), `frame ${fms.toFixed(1)} ms, steady`); }
+}
+// the readout (?perf=1 or F3)
+const perfEl = document.createElement('div');
+perfEl.style.cssText = 'position:fixed;right:12px;top:52px;z-index:8;font:11px/1.45 monospace;color:#e8ddc4;background:rgba(0,0,0,.55);padding:6px 9px;pointer-events:none;white-space:pre;display:none';
+document.body.appendChild(perfEl);
+if (new URLSearchParams(location.search).has('perf')) perfEl.style.display = 'block';
+addEventListener('keydown', e => { if (e.code === 'F3') { e.preventDefault(); perfEl.style.display = perfEl.style.display === 'none' ? 'block' : 'none'; } });
+let perfT = 0;
+function updatePerf(dt) {
+  if (perfEl.style.display === 'none' || (perfT -= dt) > 0) return; perfT = 0.5;
+  const w = Weather.wx;
+  perfEl.textContent = `${RES.fps.toFixed(0)} fps · frame ${RES.frameMs.toFixed(1)} ms\nGPU ${RES.gpu === null ? (GPUT ? 'measuring…' : 'n/a in this browser') : RES.gpu.toFixed(1) + ' ms'}\nresolution ${pixelRatio.toFixed(3)}× (max ${MAX_PR})\nrain ${w.rain.toFixed(2)} · clouds ${w.cloud.toFixed(2)} · barrier ${Weather.agitation.toFixed(2)}\nlast change: ${RES.last}`;
 }
 function loop(now) {
   requestAnimationFrame(loop);
@@ -3951,7 +4004,8 @@ function loop(now) {
   if (paused) { Weather.silence(); drawFrame(); pressed.clear(); return; }
   tick(rdt);
   adaptResolution((now - prevNow) / 1000); prevNow = now;
-  if (!window.__noRender) drawFrame(); // debug: __noRender = true keeps the page responsive in software-rendered tests
+  if (!window.__noRender) { GPUT?.begin(); drawFrame(); GPUT?.end(); } // debug: __noRender = true keeps the page responsive in software-rendered tests
+  updatePerf(rdt);
   pressed.clear();
 }
 // one step of the world, without drawing (rdt: real seconds; dt: game seconds, slowed by hit-stop and slow motion)
@@ -3997,7 +4051,7 @@ window.__game = {
   P, beasts, hero, camera, scene, THREE, game, settings, Weather, POSE,
   startRound, resetGame, startAttack, hitPlayer, currentTarget, switchTarget, acquireLock, barrierSpawn: barrier.spawn,
   get lockTarget() { return lockTarget; }, get lockOn() { return lockOn; }, set lockOn(v) { lockOn = v; },
-  press(code) { pressed.add(code); }, Daylight, setHour: h => { Daylight.setHour(h); },
+  press(code) { pressed.add(code); }, Daylight, adapt: s => adaptResolution(s), get pixelRatio() { return pixelRatio; }, setHour: h => { Daylight.setHour(h); },
   renderer, draw: () => drawFrame(),
   // debug: average cost of a frame (simulation + drawing) over n frames, and what the renderer drew
   bench(n = 5) { renderer.setPixelRatio(1); const t0 = performance.now(); for (let i = 0; i < n; i++) { tick(1 / 60); drawFrame(); renderer.getContext().finish(); } const ms = (performance.now() - t0) / n; renderer.setPixelRatio(pixelRatio); return { ms: +ms.toFixed(1), calls: renderer.info.render.calls, tris: renderer.info.render.triangles }; }, hold(code, v = true) { keys[code] = v; },
@@ -4030,7 +4084,9 @@ async function preload() {
   });
   await step('TEMPERING STEEL…', 55, async () => {
     camera.position.set(0, 4, 10); camera.lookAt(0, 1.5, 0);
+    Weather.warm(true); // the rain's material too, so the first shower doesn't stall on a shader compile
     if (renderer.compileAsync) await renderer.compileAsync(scene, camera); else renderer.compile(scene, camera);
+    Weather.warm(false);
   });
   await step('LIGHTING THE TORCHES…', 80, () => {
     trail.push(new V3(0, 1, 0), new V3(0, 2, 0)); trail.update(0);
