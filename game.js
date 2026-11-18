@@ -36,8 +36,15 @@ scene.fog = new THREE.FogExp2(0x8e9296, 0.0058);
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.1, 400);
 camera.position.set(0, 4, 14);
 
+// three.js keeps the vertical field of view fixed, so a tall, narrow (portrait) screen would see only a sliver of the
+// arena: widen the vertical view until the horizontal one is at least ~64°
+function fitFov() {
+  const a = innerWidth / innerHeight;
+  camera.fov = a >= 1 ? 58 : Math.min(88, 2 * Math.atan(Math.tan(32 * Math.PI / 180) / a) * 180 / Math.PI);
+}
+fitFov(); camera.updateProjectionMatrix();
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  camera.aspect = innerWidth / innerHeight; fitFov(); camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   for (const p of particleSystems) p.mat.uniforms.scale.value = pointScale();
 });
@@ -2370,7 +2377,7 @@ function acquireLock() {
   return best;
 }
 function currentTarget() {
-  if (!P.drawn || !(lockOn || actionHeld()) || P.state === 'dead') { lockTarget = null; return null; }
+  if (!P.drawn || !(lockOn || actionHeld() || touch.portrait) || P.state === 'dead') { lockTarget = null; return null; }
   if (!lockable(lockTarget)) lockTarget = acquireLock();
   return lockTarget;
 }
@@ -2908,18 +2915,57 @@ addEventListener('wheel', e => { camDist = clamp(camDist + Math.sign(e.deltaY) *
 // ---- touch controls: a floating joystick under the left thumb, a look-pad for the right thumb (drag turns the hero and
 // tilts the camera; locked on, a quick sideways flick switches beast), and buttons for strike, parry, step back, draw,
 // lock-on and pause. They show on phones and tablets, and on any device the moment it is touched.
-const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: false };
+//
+// Held upright (portrait) the controls are simplified for thumbs: the joystick lives in the lower-left quarter, and the
+// rest of the screen is one gesture area. Tap = strike (tap again as the blade glints to chain), touch and hold = guard
+// (the parry), swipe left / right = a side cut, swipe down = step back (and get up after a knock-down). The sword draws
+// itself on the first strike and lock-on is always on; a small button cycles the target.
+const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: false, portrait: false };
 (function touchControls() {
-  const pad = $('tpad'), stick = $('stick'), knob = $('knob'), R = 55;
+  const pad = $('tpad'), stick = $('stick'), knob = $('knob'), ring = $('gest'), R = 55;
   let stickId = null, lookId = null, sx = 0, sy = 0, lx = 0, ly = 0;
-  function enable() { if (touch.enabled) return; touch.enabled = true; document.body.classList.add('touch'); }
+  let gId = null, gx = 0, gy = 0, gt = 0, gHold = null, gDone = false, gBlock = false;
+  function enable() { if (touch.enabled) return; touch.enabled = true; document.body.classList.add('touch'); orient(); }
+  function orient() {
+    touch.portrait = touch.enabled && innerHeight > innerWidth;
+    document.body.classList.toggle('portrait', touch.portrait);
+  }
+  addEventListener('resize', orient);
   if (TOUCH) enable();
   addEventListener('touchstart', enable, { passive: true, capture: true });
   const playing = () => !paused && game.state !== 'title';
+  const buzz = ms => { try { navigator.vibrate?.(ms); } catch (e) { /* no haptics */ } };
+  // tap vs hold is judged by the touch events' own timestamps, so a slow frame on the phone can't turn a tap into a guard
+  function gestStart(t, ts) {
+    gId = t.identifier; gx = t.clientX; gy = t.clientY; gt = ts; gDone = false; gBlock = false;
+    ring.style.left = gx + 'px'; ring.style.top = gy + 'px'; ring.className = 'on';
+    clearTimeout(gHold);
+    gHold = setTimeout(() => { // still pressing, hardly moved: guard
+      if (gId === null || gDone || !playing()) return;
+      gBlock = true; touch.parry = true; ring.className = 'on guard'; buzz(12);
+    }, 180);
+  }
+  function gestMove(t) {
+    const dx = t.clientX - gx, dy = t.clientY - gy;
+    if (gDone || gBlock || Math.hypot(dx, dy) < 38) return;
+    gDone = true; clearTimeout(gHold); ring.className = 'on swipe';
+    if (!playing()) return;
+    if (Math.abs(dx) > Math.abs(dy)) pressed.add(dx < 0 ? 'AtkL' : 'AtkR'); // side cut
+    else if (dy > 0) pressed.add('Space');                                 // step back / get up
+    else pressed.add('Attack');                                            // swipe up: a strike, like a tap
+  }
+  function gestEnd(ts) {
+    clearTimeout(gHold);
+    if (gBlock) touch.parry = false;
+    if (!gDone && (!gBlock || ts - gt < 180) && playing()) pressed.add('Attack'); // tap
+    gId = null; ring.className = '';
+  }
   pad.addEventListener('touchstart', e => {
     e.preventDefault();
     for (const t of e.changedTouches) {
-      if (t.clientX < innerWidth * 0.45 && stickId === null) {
+      const stickZone = touch.portrait ? t.clientX < innerWidth * 0.5 && t.clientY > innerHeight * 0.5 : t.clientX < innerWidth * 0.45;
+      if (touch.portrait && !stickZone) { if (gId === null) gestStart(t, e.timeStamp); continue; }
+      if (stickZone && stickId === null) {
         stickId = t.identifier; sx = t.clientX; sy = t.clientY;
         stick.style.left = sx + 'px'; stick.style.top = sy + 'px'; stick.classList.add('on');
         knob.style.transform = ''; touch.stick.active = true; touch.stick.x = touch.stick.y = 0;
@@ -2937,13 +2983,14 @@ const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: fal
       } else if (t.identifier === lookId) {
         if (playing()) look((t.clientX - lx) * 2.2, (t.clientY - ly) * 1.6);
         lx = t.clientX; ly = t.clientY;
-      }
+      } else if (t.identifier === gId) gestMove(t);
     }
   }, { passive: false });
   const end = e => {
     for (const t of e.changedTouches) {
       if (t.identifier === stickId) { stickId = null; stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); }
       if (t.identifier === lookId) lookId = null;
+      if (t.identifier === gId) gestEnd(e.timeStamp);
     }
   };
   pad.addEventListener('touchend', end); pad.addEventListener('touchcancel', end);
@@ -2960,13 +3007,17 @@ const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: fal
   btn('bParry', () => { touch.parry = true; }, () => { touch.parry = false; });
   btn('bLock', () => { lockOn = !lockOn; saveSettings(); });
   btn('bPause', () => { if (paused) resumeGame(); else pauseGame(); });
-  touch.reset = () => { stickId = lookId = null; stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); touch.parry = false; };
+  btn('bTarget', () => { if (!switchTarget(1)) switchTarget(-1); });
+  touch.reset = () => {
+    stickId = lookId = gId = null; clearTimeout(gHold); ring.className = '';
+    stick.classList.remove('on'); Object.assign(touch.stick, { x: 0, y: 0, active: false }); touch.parry = false;
+  };
 })();
-// on a phone, going full screen (and sideways, where the browser allows it) gives the arena the whole display
+// on a phone, going full screen gives the arena the whole display (either way up)
 function goFullscreen() {
   if (!touch.enabled || document.fullscreenElement) return;
   const el = document.documentElement;
-  try { el.requestFullscreen?.({ navigationUI: 'hide' })?.then(() => screen.orientation?.lock?.('landscape').catch(() => {})).catch(() => {}); } catch (e) { /* not allowed */ }
+  try { el.requestFullscreen?.({ navigationUI: 'hide' })?.catch(() => {}); } catch (e) { /* not allowed */ }
 }
 
 // ============================================================ camera / hud / pops
@@ -3019,7 +3070,7 @@ function updateHUD(dt) {
   $('php').querySelector('.fill').style.transform = `scaleX(${P.hp / P.maxHp})`;
   $('php').querySelector('.ghost').style.transform = `scaleX(${P.ghostHp / P.maxHp})`;
   $('pst').querySelector('.fill').style.transform = `scaleX(${Math.max(0, P.st) / P.maxSt})`;
-  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : (touch.enabled ? 'UNARMED — TAP DRAW' : 'UNARMED — PRESS CTRL');
+  $('stance').textContent = P.state === 'down' ? (P.t > 0.7 ? 'KNOCKED DOWN — SPACE TO RISE' : 'KNOCKED DOWN') : P.drawn ? (P.state === 'block' ? 'GUARD' : (currentTarget() ? 'LOCKED · ' : '') + 'SWORD DRAWN') : (touch.portrait ? 'UNARMED — TAP TO STRIKE' : touch.enabled ? 'UNARMED — TAP DRAW' : 'UNARMED — PRESS CTRL');
   const tgt = currentTarget() || beasts.find(e => !e.dead && e.state !== 'wait');
   const eb = $('ebox');
   if (tgt && game.state !== 'title') {
@@ -3108,7 +3159,7 @@ function loop(now) {
   if (paused) { Weather.silence(); drawFrame(); pressed.clear(); return; }
   tick(rdt);
   adaptResolution((now - prevNow) / 1000); prevNow = now;
-  drawFrame();
+  if (!window.__noRender) drawFrame(); // debug: __noRender = true keeps the page responsive in software-rendered tests
   pressed.clear();
 }
 // one step of the world, without drawing (rdt: real seconds; dt: game seconds, slowed by hit-stop and slow motion)
