@@ -2727,7 +2727,7 @@ function beastMaterials(pal, vc) {
 // The Blender-built model (tools/build_thornbeak.py → models/thornbeak.glb). Its named joints are
 // driven by the same procedural animation as before; falls back to the primitive model if it fails to load.
 let beastTemplate = null;
-function buildBeast(scale, pal) {
+function buildBeast(scale, pal, build = [1, 1]) {
   if (!beastTemplate) return buildBeastPrimitive(scale, pal);
   const M = beastMaterials(pal, true);
   const root = new THREE.Group();
@@ -2743,7 +2743,7 @@ function buildBeast(scale, pal) {
     o.material = M[(o.material.name || '').toLowerCase()] || M.plume;
     o.castShadow = true; o.receiveShadow = true;
   });
-  root.scale.setScalar(scale);
+  root.scale.set(scale * build[0], scale * build[1], scale * build[0]);
   r.flashMats = [M.plume, M.rust, M.belly];
   return r;
 }
@@ -2825,10 +2825,14 @@ const beasts = [];
 class Beast {
   constructor(level, x, delay, kind) {
     this.level = level;
-    const pal = PALETTES[kind ?? Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2))];
+    const ki = kind ?? Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2)), pal = PALETTES[ki];
     this.name = pal.name;
-    this.s = 0.82 + Math.min(level, 6) * 0.03; // smaller than before: roughly chest-high to the hero
-    this.rig = buildBeast(this.s, pal); this.rig.root.userData.occluder = true; scene.add(this.rig.root);
+    // each kind has its own size and build: the plain Thornbeak is chest-high to the hero, the Ashen one stands as tall
+    // as his shoulder and is long-legged and lean, the Bloodcrest is a head taller than him and heavy-set. Within a
+    // kind they grow a little with the round, and no two birds in a pack are quite the same size.
+    const SIZE = [0.8, 1.0, 1.2], BUILD = [[1, 1], [0.94, 1.08], [1.1, 0.97]]; // [width & length, height]
+    this.s = SIZE[ki] * (1 + Math.min(level, 9) * 0.008) * rand(0.96, 1.04);
+    this.rig = buildBeast(this.s, pal, BUILD[ki]); this.rig.root.userData.occluder = true; scene.add(this.rig.root);
     this.pal = pal;
     this.pos = new V3(x, 0, -19.5); this.yaw = 0; this.vel = new V3();
     this.maxHp = Math.round(190 * (1 + 0.22 * (level - 1))); this.hp = this.maxHp; this.ghostHp = this.hp;
@@ -2837,7 +2841,7 @@ class Beast {
     this.cdir = Math.random() < 0.5 ? 1 : -1; this.think = 1; this.pecks = 1; this.pw = 0.38; this.hitDone = false;
     this.gait = rand(0, 6); this.lastSg = 1; this.iframes = 0; this.hitChain = 0; this.lastHit = -10;
     this.flash = 0; this.lookOff = 0; this.lookT = 0; this.seed = rand(0, 100); this.stagDur = 0.3; this.stagRoll = 0;
-    this.pitch = rand(0.9, 1.1) - level * 0.015; this.dead = false; this.deadT = 0;
+    this.pitch = rand(0.9, 1.1) - level * 0.012 - (this.s - 0.8) * 0.45; // the big ones call lower this.dead = false; this.deadT = 0;
     this.lungeDir = new V3(); this.fwd = new V3(0, 0, 1);
     // how well it reads the hero's wind-ups (medieval-sim's `skill`): rare at first, a real threat by round six
     this.skill = Math.min(0.45, 0.04 + 0.07 * (level - 1)); this.reacted = -1;
@@ -4162,7 +4166,7 @@ function tick(rdt) {
 }
 // debug hooks (like medieval-sim's): ?auto=1 skips the title screen; window.__game exposes the state, and
 // __game.step(seconds) runs the world in 1/60 s steps without drawing, for quick tests; __freezeAI = true stops the beasts
-window.__game = {
+window.__game = { Beast,
   P, beasts, hero, camera, scene, THREE, game, settings, Weather, POSE,
   startRound, resetGame, startAttack, hitPlayer, currentTarget, switchTarget, acquireLock, barrierSpawn: barrier.spawn,
   get lockTarget() { return lockTarget; }, get lockOn() { return lockOn; }, set lockOn(v) { lockOn = v; },
