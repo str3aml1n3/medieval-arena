@@ -26,12 +26,13 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Rounds:** each round adds tougher and more numerous beasts.
 
 ## Controls
-The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking.
+The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking. Holding it with the sword sheathed draws the sword, and a strike pressed meanwhile follows the draw.
 
 | Key | Action |
 |---|---|
 | W / S | forward / back |
-| A / D | turn (strafe when locked on) |
+| A / D | turn on the spot |
+| Space + A / D | strafe |
 | Shift | run |
 | Ctrl / F | draw / sheathe |
 | LMB / E (hold) | action key: locks on to the beast in front while held |
@@ -39,7 +40,7 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 | action + S | guard |
 | click LMB / tap E, J | quick forward strike |
 | RMB / K | parry |
-| Space | jump; step back when locked on; get up when knocked down |
+| Space (tap) | jump; step back when locked on; get up when knocked down |
 | Tab | lock-on |
 | Mouse flick | switch the locked-on beast |
 | R (hold) | look back |
