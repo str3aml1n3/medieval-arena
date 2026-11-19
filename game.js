@@ -3162,7 +3162,7 @@ function updatePlayer(dt) {
   const js = touch.stick; // the on-screen joystick (phones), x/y in -1..1, y < 0 = forward
   // action key (left mouse or E, as in medieval-sim): while it is held with the sword out, W A D strike forward / left /
   // right and S guards, instead of moving
-  const act = actionHeld() && (P.drawn || P.state === 'draw');
+  const act = actionHeld();
   const kf = !act && (keys.KeyW || keys.ArrowUp), kb = !act && (keys.KeyS || keys.ArrowDown);
   const kl = !act && (keys.KeyA || keys.ArrowLeft), kr = !act && (keys.KeyD || keys.ArrowRight);
   const fw = kf || js.y < -0.5, bw = kb || js.y > 0.5, lf = kl || js.x < -0.5, rt = kr || js.x > 0.5;
@@ -3196,9 +3196,9 @@ function updatePlayer(dt) {
     case 'idle':
     case 'block': {
       if (!canAct) { tp = P.drawn ? POSE.stance : POSE.relaxed; break; }
-      if (wantDraw) { startDraw(); break; }
+      if (wantDraw) { startDraw(); if (!P.drawn && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR }; break; }
       if (wantAttack) {
-        if (!P.drawn) { startDraw(); break; }
+        if (!P.drawn) { startDraw(); if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: swL, r: swR }; break; }
         // a strike right after the last one finished still chains (a forgiving late window)
         const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
         if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
@@ -3214,7 +3214,9 @@ function updatePlayer(dt) {
         if (target) s = dz(js.x); else turn = -dz(js.x) * 0.8;
       } else {
         if (fw) f += 1; if (bw) f -= 0.65;
-        if (target) { if (lf) s -= 1; if (rt) s += 1; } else { if (lf) turn += 1; if (rt) turn -= 1; }
+        // A/D turn on the spot; with Space held they strafe instead (and locked on they circle the target)
+        if (target || keys.Space) { if (lf) s -= 1; if (rt) s += 1; if (keys.Space && (lf || rt)) spaceStrafed = true; }
+        else { if (lf) turn += 1; if (rt) turn -= 1; }
       }
       P.yaw += turn * 2.9 * dt;
       if (target) P.yaw = dampAng(P.yaw, yawTo(P.pos, target.pos), 9, dt);
@@ -3235,7 +3237,12 @@ function updatePlayer(dt) {
       if (fw) desired.copy(fwdV).multiplyScalar(2.2);
       if (lf && !target) P.yaw += 2 * dt; if (rt && !target) P.yaw -= 2 * dt;
       moving = true;
-      if (P.t > 0.55) P.state = 'idle';
+      if (wantAttack && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR };
+      if (P.t > 0.55) {
+        P.state = 'idle';
+        if (P.pendingAtk && P.drawn && P.st >= 6) startAttack(0, P.pendingAtk.l, P.pendingAtk.r, target);
+        P.pendingAtk = null;
+      }
       break;
     }
     case 'attack': {
@@ -3567,12 +3574,14 @@ const keys = {}; const pressed = new Set(); let mouseR = false;
 // The action key (medieval-sim's modern scheme): left mouse or E. Holding it locks on to the beast in front; with the
 // sword out, W / A / D then strike forward / left / right (press again to chain) and S guards. Pressing it while a
 // direction is already held strikes at once. A quick click on its own also strikes forward.
-let mouseL = false, actT = 0, actUsed = false;
+let mouseL = false, actT = 0, actUsed = false, spaceT = 0, spaceStrafed = false;
 const actionHeld = () => mouseL || !!keys.KeyE;
 const ACT_DIRS = { KeyW: 'AtkF', ArrowUp: 'AtkF', KeyA: 'AtkL', ArrowLeft: 'AtkL', KeyD: 'AtkR', ArrowRight: 'AtkR' };
 function actionPress() {
   if (actionHeld()) return; // the other action input is already down
   actT = performance.now(); actUsed = false;
+  // holding the action key with the sword sheathed draws it; a strike asked for meanwhile follows the draw
+  if (!P.drawn && P.state !== 'draw' && (game.state === 'play' || game.state === 'between')) pressed.add('Draw');
   const held = Object.keys(ACT_DIRS).find(k => keys[k]);
   if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
 }
@@ -3588,7 +3597,8 @@ addEventListener('keydown', e => {
   if (!keys[e.code]) {
     pressed.add(e.code);
     if (e.code === 'KeyE' && !paused) actionPress();
-    if (ACT_DIRS[e.code] && actionHeld() && (P.drawn || P.state === 'draw')) { pressed.add(ACT_DIRS[e.code]); actUsed = true; }
+    if (e.code === 'Space') { pressed.delete('Space'); spaceT = performance.now(); spaceStrafed = false; if (lockTarget || P.state === 'down') pressed.add('Space'); }
+    if (ACT_DIRS[e.code] && actionHeld()) { pressed.add(ACT_DIRS[e.code]); actUsed = true; }
     if (e.code === 'KeyS' && actionHeld()) actUsed = true;
     if (e.code === 'ControlLeft' || e.code === 'ControlRight') pressed.add('Draw');
   }
@@ -3600,7 +3610,10 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM' && master) master.gain.value = master.gain.value > 0 ? 0 : settings.sound;
   if (e.code === 'KeyN') Music.toggle();
 });
-addEventListener('keyup', e => { keys[e.code] = false; if (e.code === 'KeyE') actionRelease(); });
+addEventListener('keyup', e => {
+  keys[e.code] = false; if (e.code === 'KeyE') actionRelease();
+  if (e.code === 'Space' && !spaceStrafed && !lockTarget && P.state !== 'down' && performance.now() - spaceT < 350) pressed.add('Space'); // a tap: jump
+});
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; });
 renderer.domElement.addEventListener('mousedown', e => {
   if (game.state === 'title' || paused) return;
