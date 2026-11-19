@@ -2823,9 +2823,9 @@ function buildBeastPrimitive(scale, pal) {
 
 const beasts = [];
 class Beast {
-  constructor(level, x, delay) {
+  constructor(level, x, delay, kind) {
     this.level = level;
-    const pal = PALETTES[Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2))];
+    const pal = PALETTES[kind ?? Math.min(PALETTES.length - 1, Math.floor((level - 1) / 2))];
     this.name = pal.name;
     this.s = 0.82 + Math.min(level, 6) * 0.03; // smaller than before: roughly chest-high to the hero
     this.rig = buildBeast(this.s, pal); this.rig.root.userData.occluder = true; scene.add(this.rig.root);
@@ -3468,10 +3468,16 @@ function startRound(n) {
   game.round = n; game.state = 'play';
   for (const e of beasts) e.dispose();
   beasts.length = 0;
-  const count = n >= 5 ? 3 : n >= 3 ? 2 : 1;
-  for (let i = 0; i < count; i++) beasts.push(new Beast(n, (i - (count - 1) / 2) * 0.6, 1.2 + i * 2.4));
+  // Rounds alternate: odd rounds bring a pack of plain Thornbeaks, one more each time (1, 2, 3, 4 at most), slowly
+  // getting tougher; even rounds bring a single harder bird, alone: an Ashen Thornbeak in round two, a Bloodcrest from
+  // round four, each stronger than the pack before it.
+  const k = Math.floor(n / 2), lone = n % 2 === 0;
+  const count = lone ? 1 : Math.min(4, k + 1), kind = lone ? Math.min(PALETTES.length - 1, k) : 0;
+  const level = lone ? n + 1 : 1 + Math.floor(k * 0.75);
+  for (let i = 0; i < count; i++) beasts.push(new Beast(level, (i - (count - 1) / 2) * 0.6, 1.2 + i * 2.4, kind));
   $('round').textContent = 'ROUND ' + toRoman(n);
-  showMsg('ROUND ' + toRoman(n), count > 1 ? `${count} beasts enter the stockade` : 'a beast enters the stockade');
+  const nm = PALETTES[kind].name.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  showMsg('ROUND ' + toRoman(n), count > 1 ? `${count} Thornbeaks enter the stockade` : lone ? `the ${nm} enters the stockade, alone` : 'a Thornbeak enters the stockade');
   SFX.gong();
 }
 function onBeastDeath() {

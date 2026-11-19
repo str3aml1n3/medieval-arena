@@ -23,7 +23,7 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **From behind:** a cut into a beast's back bites deeper, always staggers it, and even stops a charge.
 - **Knock-down:** a charge that hits you clean, without a parry, throws you flat on your back. Press Space (or attack, or W) to get up. You can't be hurt while you're down or getting up.
 - **Reading the beast:** its eyes flare before every strike. It circles, pecks (sometimes twice), crouches and screeches before a charging lunge, and leaps back to break long combos. Later beasts learn to read your wind-up and spring aside, often pecking straight back in, so pick your moments.
-- **Rounds:** each round adds tougher and more numerous beasts.
+- **Rounds:** odd rounds bring a pack of plain Thornbeaks, one more each time (one, two, three, then four); even rounds bring a single harder bird alone: an Ashen Thornbeak in round two, a Bloodcrest Thornbeak from round four, each stronger than the last.
 
 ## Controls
 The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking. Holding it with the sword sheathed draws the sword, and a strike pressed meanwhile follows the draw.
