@@ -2387,7 +2387,7 @@ function triplanarDetail(mat, tex, scale, bump, strength = 1, roughVar = 0) {
 // forward with lighter tips, thick dark brows, and a full dark beard with grey on the cheeks, running down the neck.
 function buildFace(headBone, hairMat, skinMat) {
   // the face sits a little higher on the head bone than the old head did, to leave room for a neck above the collar
-  const head = new THREE.Group(); head.position.y = 0.025; headBone.add(head);
+  const head = new THREE.Group(); head.position.y = 0.006; headBone.add(head);
   const lin = hex => new THREE.Color(hex);                      // colours are given in sRGB; three converts them
   const gauss = (x, y, cx, cy, sx, sy) => Math.exp(-(((x - cx) / sx) ** 2 + ((y - cy) / sy) ** 2));
   const interp = (tab, t) => { for (let i = 1; i < tab.length; i++) if (t <= tab[i][0]) { const [a, va] = tab[i - 1], [b, vb] = tab[i]; return lerp(va, vb, (t - a) / (b - a)); } return tab[tab.length - 1][1]; };
@@ -2401,7 +2401,7 @@ function buildFace(headBone, hairMat, skinMat) {
     if (d.y < 0 && d.z > 0) { p.y -= 0.012 * d.z * smoothstep(0, -0.7, d.y); p.z += 0.012 * d.z * smoothstep(-0.2, -0.7, d.y); } // the chin comes down and forward
     if (d.y < -0.45) { // below the jaw: into the neck
       const t = smoothstep(-0.45, -1, d.y), h = Math.hypot(d.x, d.z) || 1;
-      const nr = 0.053 + 0.014 * t * t;                                                    // flaring into the shoulders
+      const nr = 0.059 + 0.012 * t * t;                                                    // flaring into the shoulders
       p.x = lerp(p.x, d.x / h * nr, t); p.z = lerp(p.z, -0.01 + d.z / h * nr, t); p.y = lerp(p.y, -0.15, t * t);
     }
     return p;
@@ -2450,7 +2450,7 @@ function buildFace(headBone, hairMat, skinMat) {
   // ---- hair masks (0..1) on the skin; phi = angle round the head, 0 straight ahead
   const jit = (p, s) => (noise2(p.x * s + 13.1, p.y * s + p.z * s * 0.7) - 0.5);
   // the hairline: high at the receding temples, a short sideburn before the ear, down to the nape at the back
-  const HAIRLINE = [[0, 0.166], [0.12, 0.172], [0.3, 0.196], [0.55, 0.2], [0.8, 0.158], [1.1, 0.124], [1.5, 0.108], [1.55, 0.062], [1.7, 0.062], [1.74, 0.134], [2.1, 0.134], [2.25, 0.07], [2.5, 0.03], [3.15, 0.015]];
+  const HAIRLINE = [[0, 0.166], [0.12, 0.172], [0.3, 0.196], [0.55, 0.2], [0.8, 0.158], [1.1, 0.124], [1.5, 0.108], [1.55, 0.062], [1.7, 0.062], [1.74, 0.134], [2.1, 0.134], [2.25, 0.05], [2.5, 0.0], [3.15, -0.022]];
   const scalpMask = p => { const phi = Math.abs(Math.atan2(p.x, p.z)), y0 = interp(HAIRLINE, phi) + jit(p, 160) * 0.008; return smoothstep(y0 - 0.002, y0 + 0.008, p.y); };
   // the beard: under a line from the sideburn to the corner of the mouth, down onto the neck; lips left bare
   const BEARD_TOP = [[0, 0.049], [0.2, 0.046], [0.4, 0.038], [0.7, 0.046], [0.95, 0.056], [1.3, 0.066], [1.55, 0.07], [1.7, 0.07], [1.76, 0.0], [1.95, -0.06], [3.15, -0.2]];
