@@ -3141,9 +3141,11 @@ function checkPlayerHits() {
   }
 }
 
-function startAttack(step, lf, rt, target) {
+function startAttack(step, lf, rt, target, fw) {
+  // a direction given with the strike (action + W / A / D) always decides the cut, at any point in the chain;
+  // a plain click follows the combo (chop, cross-cuts, turn-around, weave, heavy)
   let type = COMBO[step];
-  if (step < 3) { if (lf) type = 'rl'; else if (rt) type = 'lr'; }
+  if (fw) type = 'chop'; else if (lf) type = 'rl'; else if (rt) type = 'lr';
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
   P.swingId++; P.queued = null; P.chainGrace = 0;
@@ -3171,7 +3173,7 @@ function updatePlayer(dt) {
   const kl = !act && (keys.KeyA || keys.ArrowLeft), kr = !act && (keys.KeyD || keys.ArrowRight);
   const fw = kf || js.y < -0.5, bw = kb || js.y > 0.5, lf = kl || js.x < -0.5, rt = kr || js.x > 0.5;
   const wantAttack = pressed.has('Attack') || pressed.has('KeyJ') || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR');
-  const swL = pressed.has('AtkL') || (lf && !pressed.has('AtkF') && !pressed.has('AtkR')), swR = pressed.has('AtkR') || (rt && !pressed.has('AtkF') && !pressed.has('AtkL'));
+  const swF = pressed.has('AtkF'), swL = pressed.has('AtkL') || (lf && !pressed.has('AtkF') && !pressed.has('AtkR')), swR = pressed.has('AtkR') || (rt && !pressed.has('AtkF') && !pressed.has('AtkL'));
   const wantBlock = mouseR || keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
   const wantDraw = pressed.has('KeyF') || pressed.has('Digit1') || pressed.has('Draw');
   const wantDodge = pressed.has('Space');
@@ -3200,12 +3202,12 @@ function updatePlayer(dt) {
     case 'idle':
     case 'block': {
       if (!canAct) { tp = P.drawn ? POSE.stance : POSE.relaxed; break; }
-      if (wantDraw) { startDraw(); if (!P.drawn && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR }; break; }
+      if (wantDraw) { startDraw(); if (!P.drawn && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR, f: swF }; break; }
       if (wantAttack) {
-        if (!P.drawn) { startDraw(); if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: swL, r: swR }; break; }
+        if (!P.drawn) { startDraw(); if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: swL, r: swR, f: swF }; break; }
         // a strike right after the last one finished still chains (a forgiving late window)
         const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
-        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
+        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target, swF); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
       }
       // Space: locked on, a step back (with a moment of invulnerability); otherwise a jump
       if (wantDodge && target && P.st >= 18) { startDodge(); break; }
@@ -3241,10 +3243,10 @@ function updatePlayer(dt) {
       if (fw) desired.copy(fwdV).multiplyScalar(2.2);
       if (lf && !target) P.yaw += 2 * dt; if (rt && !target) P.yaw -= 2 * dt;
       moving = true;
-      if (wantAttack && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR };
+      if (wantAttack && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR, f: swF };
       if (P.t > 0.55) {
         P.state = 'idle';
-        if (P.pendingAtk && P.drawn && P.st >= 6) startAttack(0, P.pendingAtk.l, P.pendingAtk.r, target);
+        if (P.pendingAtk && P.drawn && P.st >= 6) startAttack(0, P.pendingAtk.l, P.pendingAtk.r, target, P.pendingAtk.f);
         P.pendingAtk = null;
       }
       break;
@@ -3258,12 +3260,12 @@ function updatePlayer(dt) {
       // breaks the chain.
       if (wantAttack && P.step < COMBO.length - 1 && !P.failed) {
         if (P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
-        else P.queued = { l: swL, r: swR, at: P.t };
+        else P.queued = { l: swL, r: swR, f: swF, at: P.t };
       }
       if (P.queued && !P.failed && P.t >= winStart && P.st >= 4) {
         const q = P.queued, late = (P.t - winStart) / (tot - winStart);
         popText(hero.swordTip.getWorldPosition(new V3()), late < 0.35 ? 'PERFECT' : 'GOOD', 'timing');
-        startAttack(P.step + 1, q.l, q.r, target);
+        startAttack(P.step + 1, q.l, q.r, target, q.f);
         break;
       }
       if (wantDodge && P.t > w + a && target && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
