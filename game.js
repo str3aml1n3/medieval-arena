@@ -3142,10 +3142,11 @@ function checkPlayerHits() {
 }
 
 function startAttack(step, lf, rt, target, fw) {
-  // a direction given with the strike (action + W / A / D) always decides the cut, at any point in the chain;
-  // a plain click follows the combo (chop, cross-cuts, turn-around, weave, heavy)
+  // A forward strike (action + W) or a plain click follows the combo: chop, cross-cuts, turn-around, weave, heavy, so
+  // pressing W in rhythm runs the whole chain. A and D always give the cut to that side, at any point in the chain
+  // (and still count as a step of it).
   let type = COMBO[step];
-  if (fw) type = 'chop'; else if (lf) type = 'rl'; else if (rt) type = 'lr';
+  if (!fw) { if (lf) type = 'rl'; else if (rt) type = 'lr'; }
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
   P.swingId++; P.queued = null; P.chainGrace = 0; P.atkBuf = null;
@@ -3179,7 +3180,7 @@ function updatePlayer(dt) {
   // can, instead of being dropped.
   if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.atkBuf = { l: swL, r: swR, f: swF, t: 0.4 };
   else if (P.atkBuf && (P.atkBuf.t -= dt) <= 0) P.atkBuf = null;
-  const wantBlock = mouseR || keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
+  const wantBlock = keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
   const wantDraw = pressed.has('KeyF') || pressed.has('Digit1') || pressed.has('Draw');
   const wantDodge = pressed.has('Space');
   const sprint = keys.ShiftLeft || keys.ShiftRight || Math.hypot(js.x, js.y) > 0.95;
@@ -3228,7 +3229,7 @@ function updatePlayer(dt) {
       } else {
         if (fw) f += 1; if (bw) f -= 0.65;
         // A/D turn on the spot; with Space held they strafe instead (and locked on they circle the target)
-        if (target || keys.Space) { if (lf) s -= 1; if (rt) s += 1; if (keys.Space && (lf || rt)) spaceStrafed = true; }
+        if (target || spaceHeld()) { if (lf) s -= 1; if (rt) s += 1; if (spaceHeld() && (lf || rt)) spaceStrafed = true; }
         else { if (lf) turn += 1; if (rt) turn -= 1; }
       }
       P.yaw += turn * 2.9 * dt;
@@ -3269,8 +3270,8 @@ function updatePlayer(dt) {
       // pressed again once this cut has landed, it starts a fresh chain from the first strike.
       if (wantAttack) {
         const chainable = P.step < COMBO.length - 1 && !P.failed;
-        if (chainable && P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
-        else if (P.t >= winStart - 0.07) P.queued = { l: swL, r: swR, f: swF, at: P.t, fresh: !chainable };
+        if (chainable && P.t < winStart - 0.12) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
+        else if (P.t >= winStart - 0.12) P.queued = { l: swL, r: swR, f: swF, at: P.t, fresh: !chainable };
       }
       if (P.queued && P.t >= winStart && P.st > 0) {
         const q = P.queued, late = (P.t - winStart) / (tot - winStart);
@@ -3302,7 +3303,7 @@ function updatePlayer(dt) {
       tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
       if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
       k = 30;
-      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.07;
+      const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.12;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
       hero.bladeMat.emissive.setRGB(0.9 * g, 0.55 * g, 0.2 * g);
       if (P.t >= tot) { P.state = 'idle'; hero.bladeMat.emissive.setRGB(0, 0, 0); if (!P.failed) { P.chainGrace = 0.3; P.lastStep = P.step; } }
@@ -3598,6 +3599,18 @@ const keys = {}; const pressed = new Set(); let mouseR = false;
 // direction is already held strikes at once. A quick click on its own also strikes forward.
 let mouseL = false, actT = 0, actUsed = false, spaceT = 0, spaceStrafed = false;
 const actionHeld = () => mouseL || !!keys.KeyE;
+// Space and the right mouse button are the same control: locked on, a step back at once; otherwise the strafe modifier
+// while held (with A / D), and a quick tap jumps
+const spaceHeld = () => !!keys.Space || mouseR;
+function spaceDown(otherHeld) {
+  if (otherHeld) return; // the other of the two is already down
+  spaceT = performance.now(); spaceStrafed = false;
+  if (lockTarget || P.state === 'down') pressed.add('Space');
+}
+function spaceUp() {
+  if (spaceHeld()) return;
+  if (!spaceStrafed && !lockTarget && P.state !== 'down' && performance.now() - spaceT < 350) pressed.add('Space'); // a tap: jump
+}
 const ACT_DIRS = { KeyW: 'AtkF', ArrowUp: 'AtkF', KeyA: 'AtkL', ArrowLeft: 'AtkL', KeyD: 'AtkR', ArrowRight: 'AtkR' };
 function actionPress() {
   if (actionHeld()) return; // the other action input is already down
@@ -3622,7 +3635,7 @@ addEventListener('keydown', e => {
   if (!keys[e.code]) {
     pressed.add(e.code);
     if (e.code === 'KeyE' && !paused) actionPress();
-    if (e.code === 'Space') { pressed.delete('Space'); spaceT = performance.now(); spaceStrafed = false; if (lockTarget || P.state === 'down') pressed.add('Space'); }
+    if (e.code === 'Space') { pressed.delete('Space'); spaceDown(mouseR); }
     if (ACT_DIRS[e.code] && actionHeld()) { pressed.add(ACT_DIRS[e.code]); actUsed = true; }
     if (e.code === 'KeyS' && actionHeld()) actUsed = true;
     if (e.code === 'ControlLeft' || e.code === 'ControlRight') pressed.add('Draw');
@@ -3637,7 +3650,7 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => {
   keys[e.code] = false; if (e.code === 'KeyE') actionRelease();
-  if (e.code === 'Space' && !spaceStrafed && !lockTarget && P.state !== 'down' && performance.now() - spaceT < 350) pressed.add('Space'); // a tap: jump
+  if (e.code === 'Space' && !mouseR) spaceUp();
 });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; });
 addEventListener('mousedown', e => {
@@ -3645,10 +3658,10 @@ addEventListener('mousedown', e => {
   if (!document.pointerLockElement && e.target.closest?.('button, input, select, a, label, .panel, #touch .tb')) return; // menu and touch buttons
   if (document.pointerLockElement !== renderer.domElement) lockPointer();
   if (e.button === 0) { actionPress(); mouseL = true; }
-  if (e.button === 2) mouseR = true;
+  if (e.button === 2) { mouseR = true; spaceDown(!!keys.Space); }
   if (e.button === 1) { lockOn = !lockOn; e.preventDefault(); }
 });
-addEventListener('mouseup', e => { if (e.button === 2) mouseR = false; if (e.button === 0 && mouseL) { mouseL = false; actionRelease(); } });
+addEventListener('mouseup', e => { if (e.button === 2 && mouseR) { mouseR = false; spaceUp(); } if (e.button === 0 && mouseL) { mouseL = false; actionRelease(); } });
 addEventListener('contextmenu', e => e.preventDefault());
 let camYaw = Math.PI, camPitch = 0.3, camDist = 4.8, lookBack = false;
 addEventListener('mousemove', e => {
