@@ -2300,7 +2300,7 @@ const SWINGS = {
   rl: { w: 'rlW', seq: ['rlS'], arc: 1.2, dmg: 0.9, lunge: 1.0 },
   lr: { w: 'lrW', seq: ['lrS'], arc: 1.2, dmg: 0.95, lunge: 1.0 },
   wave: { w: 'waveW', seq: ['wave1', 'waveM', 'wave2'], cuts: [0, 2], arc: 1.25, dmg: 0.7, lunge: 0.9, aMul: 2.7, slow: 1.05 },
-  spin: { w: 'spinW', seq: ['spinA', 'spinS'], cuts: [0, 1], once: true, arc: 3.3, dmg: 1.4, lunge: 1.2, aMul: 2.3, wMul: 1.15, spin: true },
+  spin: { w: 'spinW', seq: ['spinA', 'spinS'], cuts: [0, 1], once: true, arc: 3.3, dmg: 1.4, lunge: 1.2, aMul: 3.6, wMul: 1.5, spin: true },
   heavy: { w: 'heavyW', seq: ['heavyS'], arc: 0.7, dmg: 1.75, lunge: 2.6, slow: 1.3 },
 };
 const COMBO = ['chop', 'rl', 'lr', 'spin', 'wave', 'heavy'];
@@ -3301,7 +3301,7 @@ function updatePlayer(dt) {
           : blend(last, base, ease(clamp((x - 0.3) / 0.7, 0, 1)));
       }
       tp = blend(tp, tp, 0); tp.hipR[1] += tp.spine[1] * 0.26; tp.spine[1] *= 0.82; // the hips turn into the blow, not just the chest
-      if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.45) / (w * 0.55 + a * 0.85), 0, 1)); // the whole body goes round
+      if (sw.spin) P.visYaw = -Math.PI * 2 * ease(clamp((P.t - w * 0.3) / (w * 0.7 + a * 1.1), 0, 1)); // the whole body goes round, slow enough to read
       k = 30;
       const inWin = P.step < COMBO.length - 1 && !P.failed && P.t >= winStart - 0.12;
       const g = inWin ? 0.6 + 0.4 * Math.sin(P.t * 40) : 0;
@@ -3619,14 +3619,9 @@ function actionPress() {
   if (!P.drawn && P.state !== 'draw' && (game.state === 'play' || game.state === 'between')) pressed.add('Draw');
   const held = Object.keys(ACT_DIRS).find(k => keys[k]);
   if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
-  // mid-chain a click is plainly the next strike: take it the moment the button goes down, not on release, so the
-  // timing is the press the player made (otherwise a slightly long click landed late or was lost)
-  else if (P.drawn && (P.state === 'attack' || P.chainGrace > 0) && !(keys.KeyS || keys.ArrowDown)) { pressed.add('Attack'); actUsed = true; }
 }
-function actionRelease() {
-  if (actionHeld()) return;
-  if (!actUsed && performance.now() - actT < 350 && !(keys.KeyS || keys.ArrowDown)) pressed.add('Attack');
-}
+// the action key only focuses (draws the sword and locks on while held): letting go never strikes
+function actionRelease() {}
 // Ctrl draws the sword, and browsers never let a page block Ctrl+W: ask before the tab closes mid-fight
 addEventListener('beforeunload', e => { if (game.state === 'play' || game.state === 'between') { e.preventDefault(); e.returnValue = ''; } });
 addEventListener('keydown', e => {
