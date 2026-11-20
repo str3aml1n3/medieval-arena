@@ -3265,14 +3265,17 @@ function updatePlayer(dt) {
       // blade glints) and runs to the end of the recovery, plus a short grace after it (`chainGrace` in idle). A press up
       // to 70 ms early is still taken (human timing), and fires as the window opens. Anything earlier, so mashing too,
       // breaks the chain.
-      if (wantAttack && P.step < COMBO.length - 1 && !P.failed) {
-        if (P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
-        else P.queued = { l: swL, r: swR, f: swF, at: P.t };
+      // A press that broke the chain (too early), or one after the last strike of the combo, is never just swallowed:
+      // pressed again once this cut has landed, it starts a fresh chain from the first strike.
+      if (wantAttack) {
+        const chainable = P.step < COMBO.length - 1 && !P.failed;
+        if (chainable && P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
+        else if (P.t >= winStart - 0.07) P.queued = { l: swL, r: swR, f: swF, at: P.t, fresh: !chainable };
       }
-      if (P.queued && !P.failed && P.t >= winStart && P.st > 0) {
+      if (P.queued && P.t >= winStart && P.st > 0) {
         const q = P.queued, late = (P.t - winStart) / (tot - winStart);
-        popText(hero.swordTip.getWorldPosition(new V3()), late < 0.35 ? 'PERFECT' : 'GOOD', 'timing');
-        startAttack(P.step + 1, q.l, q.r, target, q.f);
+        if (!q.fresh) popText(hero.swordTip.getWorldPosition(new V3()), late < 0.35 ? 'PERFECT' : 'GOOD', 'timing');
+        startAttack(q.fresh ? 0 : P.step + 1, q.l, q.r, target, q.f);
         break;
       }
       if (wantDodge && P.t > w + a && target && P.st >= 18) { startDodge(); hero.bladeMat.emissive.setRGB(0, 0, 0); break; }
@@ -3605,7 +3608,7 @@ function actionPress() {
   if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
   // mid-chain a click is plainly the next strike: take it the moment the button goes down, not on release, so the
   // timing is the press the player made (otherwise a slightly long click landed late or was lost)
-  else if (P.drawn && ((P.state === 'attack' && !P.failed && P.step < COMBO.length - 1) || P.chainGrace > 0) && !(keys.KeyS || keys.ArrowDown)) { pressed.add('Attack'); actUsed = true; }
+  else if (P.drawn && (P.state === 'attack' || P.chainGrace > 0) && !(keys.KeyS || keys.ArrowDown)) { pressed.add('Attack'); actUsed = true; }
 }
 function actionRelease() {
   if (actionHeld()) return;
