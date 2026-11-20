@@ -32,15 +32,15 @@ The action key works as in medieval-sim: hold left mouse or E, then use W / A / 
 |---|---|
 | W / S | forward / back |
 | A / D | turn on the spot |
-| Space + A / D | strafe |
+| Space / RMB held + A / D | strafe |
 | Shift | run |
 | Ctrl / F | draw / sheathe |
 | LMB / E (hold) | action key: locks on to the beast in front while held |
 | action + W / A / D | strike forward / left / right (press again to chain) |
 | action + S | guard |
 | click LMB / tap E, J | quick forward strike |
-| RMB / K | parry |
-| Space (tap) | jump; step back when locked on; get up when knocked down |
+| K | parry (or hold the action key + S) |
+| Space / RMB (tap) | jump; step back when locked on; get up when knocked down |
 | Tab | lock-on |
 | Mouse flick | switch the locked-on beast |
 | R (hold) | look back |
