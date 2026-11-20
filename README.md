@@ -26,7 +26,7 @@ Everything else is generated at runtime with [three.js](https://threejs.org): th
 - **Rounds:** odd rounds bring a pack of plain Thornbeaks, one more each time (one, two, three, then four); even rounds bring a single harder bird alone: an Ashen Thornbeak in round two, a Bloodcrest Thornbeak from round four, each stronger than the last. Each kind has its own size: the plain Thornbeak is chest-high to the hero, the lean, long-legged Ashen one about shoulder-high, and the heavy-set Bloodcrest stands a head taller than him; no two birds in a pack are quite the same size.
 
 ## Controls
-The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking. Holding it with the sword sheathed draws the sword, and a strike pressed meanwhile follows the draw.
+The action key works as in medieval-sim: hold left mouse or E, then use W / A / D to swing and S to guard. While you hold it, the movement keys fight instead of walking. Holding it with the sword sheathed draws the sword, and a strike pressed meanwhile follows the draw. While held it also locks onto the nearest beast, and the key always picks the cut, at any point in a chain: W a forward chop, A a cut to the left, D a cut to the right. Plain clicks follow the combo order (chop, cross-cuts, turn-around, weave, heavy).
 
 | Key | Action |
 |---|---|
