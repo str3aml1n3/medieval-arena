@@ -3049,9 +3049,9 @@ let vignetteA = 0;
 // Lock-on (after medieval-sim's acquireLock): the lock is sticky. It stays on one beast until that beast dies or gets
 // out of range, instead of jumping to whichever beast is nearest this frame. A new lock takes the beast roughly in front,
 // nearest first (score = distance × (2.2 − facing)). A quick flick of the mouse switches to the next beast on that side.
-const LOCK_RANGE = 15;
+const LOCK_RANGE = 30; // the whole arena, gate included: holding the action key finds the bird from anywhere
 let lockTarget = null, flickX = 0, flickCd = 0;
-const lockable = e => e && !e.dead && e.state !== 'wait' && Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z) < LOCK_RANGE;
+const lockable = e => e && !e.dead && Math.hypot(e.pos.x - P.pos.x, e.pos.z - P.pos.z) < LOCK_RANGE;
 function acquireLock() {
   let best = null, bs = 1e9;
   const fx = Math.sin(P.yaw), fz = Math.cos(P.yaw);
@@ -3211,7 +3211,7 @@ function updatePlayer(dt) {
       const buf = !wantAttack && P.atkBuf && !(wantBlock && P.drawn) ? P.atkBuf : null;
       if (wantAttack || buf) {
         const bl = buf ? buf.l : swL, br = buf ? buf.r : swR, bf = buf ? buf.f : swF;
-        if (!P.drawn) { startDraw(); if (buf || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: bl, r: br, f: bf }; P.atkBuf = null; break; }
+        if (!P.drawn) { startDraw(); P.pendingAtk = { l: bl, r: br, f: bf }; P.atkBuf = null; break; }
         // a strike right after the last one finished still chains (a forgiving late window)
         const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
         if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, bl, br, target, bf); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
@@ -3250,8 +3250,8 @@ function updatePlayer(dt) {
       if (fw) desired.copy(fwdV).multiplyScalar(2.2);
       if (lf && !target) P.yaw += 2 * dt; if (rt && !target) P.yaw -= 2 * dt;
       moving = true;
-      if (wantAttack && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR, f: swF };
-      if (P.t > 0.55) {
+      if (wantAttack) P.pendingAtk = { l: swL, r: swR, f: swF };
+      if (P.t > (P.pendingAtk && P.drawn ? 0.36 : 0.55)) { // a strike asked for during the draw comes straight out of it
         P.state = 'idle';
         if (P.pendingAtk && P.drawn && P.st >= 6) startAttack(0, P.pendingAtk.l, P.pendingAtk.r, target, P.pendingAtk.f);
         P.pendingAtk = null;
