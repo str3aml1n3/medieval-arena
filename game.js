@@ -3148,7 +3148,7 @@ function startAttack(step, lf, rt, target, fw) {
   if (fw) type = 'chop'; else if (lf) type = 'rl'; else if (rt) type = 'lr';
   const sw = SWINGS[type];
   Object.assign(P, { state: 'attack', t: 0, step, swing: sw, swingType: type, queued: false, failed: false, swungSound: false });
-  P.swingId++; P.queued = null; P.chainGrace = 0;
+  P.swingId++; P.queued = null; P.chainGrace = 0; P.atkBuf = null;
   P.hitSet.clear();
   const sp = Math.max(0.72, Math.pow(0.93, step)) * (sw.slow || 1);
   P.times = { w: 0.21 * sp * (sw.wMul || 1), a: 0.11 * sp * (sw.aMul || 1), r: 0.42 * sp };
@@ -3174,6 +3174,11 @@ function updatePlayer(dt) {
   const fw = kf || js.y < -0.5, bw = kb || js.y > 0.5, lf = kl || js.x < -0.5, rt = kr || js.x > 0.5;
   const wantAttack = pressed.has('Attack') || pressed.has('KeyJ') || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR');
   const swF = pressed.has('AtkF'), swL = pressed.has('AtkL') || (lf && !pressed.has('AtkF') && !pressed.has('AtkR')), swR = pressed.has('AtkR') || (rt && !pressed.has('AtkF') && !pressed.has('AtkL'));
+  // A strike asked for with a direction (action + W / A / D) while the hero can't start one yet (still guarding, getting
+  // over a hit or a landing, the chain just ended, a breath short of stamina) is kept for 0.4 s and fires as soon as he
+  // can, instead of being dropped.
+  if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.atkBuf = { l: swL, r: swR, f: swF, t: 0.4 };
+  else if (P.atkBuf && (P.atkBuf.t -= dt) <= 0) P.atkBuf = null;
   const wantBlock = mouseR || keys.KeyK || touch.parry || (act && (keys.KeyS || keys.ArrowDown));
   const wantDraw = pressed.has('KeyF') || pressed.has('Digit1') || pressed.has('Draw');
   const wantDodge = pressed.has('Space');
@@ -3203,11 +3208,13 @@ function updatePlayer(dt) {
     case 'block': {
       if (!canAct) { tp = P.drawn ? POSE.stance : POSE.relaxed; break; }
       if (wantDraw) { startDraw(); if (!P.drawn && (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR'))) P.pendingAtk = { l: swL, r: swR, f: swF }; break; }
-      if (wantAttack) {
-        if (!P.drawn) { startDraw(); if (pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: swL, r: swR, f: swF }; break; }
+      const buf = !wantAttack && P.atkBuf && !(wantBlock && P.drawn) ? P.atkBuf : null;
+      if (wantAttack || buf) {
+        const bl = buf ? buf.l : swL, br = buf ? buf.r : swR, bf = buf ? buf.f : swF;
+        if (!P.drawn) { startDraw(); if (buf || pressed.has('AtkF') || pressed.has('AtkL') || pressed.has('AtkR')) P.pendingAtk = { l: bl, r: br, f: bf }; P.atkBuf = null; break; }
         // a strike right after the last one finished still chains (a forgiving late window)
         const late = P.chainGrace > 0 && P.lastStep < COMBO.length - 1;
-        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, swL, swR, target, swF); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
+        if (P.st >= 6) { startAttack(late ? P.lastStep + 1 : 0, bl, br, target, bf); if (late) popText(hero.swordTip.getWorldPosition(new V3()), 'GOOD', 'timing'); break; }
       }
       // Space: locked on, a step back (with a moment of invulnerability); otherwise a jump
       if (wantDodge && target && P.st >= 18) { startDodge(); break; }
@@ -3262,7 +3269,7 @@ function updatePlayer(dt) {
         if (P.t < winStart - 0.07) { P.failed = true; P.queued = null; popText(hero.swordTip.getWorldPosition(new V3()), 'TOO EARLY', 'timing'); }
         else P.queued = { l: swL, r: swR, f: swF, at: P.t };
       }
-      if (P.queued && !P.failed && P.t >= winStart && P.st >= 4) {
+      if (P.queued && !P.failed && P.t >= winStart && P.st > 0) {
         const q = P.queued, late = (P.t - winStart) / (tot - winStart);
         popText(hero.swordTip.getWorldPosition(new V3()), late < 0.35 ? 'PERFECT' : 'GOOD', 'timing');
         startAttack(P.step + 1, q.l, q.r, target, q.f);
@@ -3596,10 +3603,13 @@ function actionPress() {
   if (!P.drawn && P.state !== 'draw' && (game.state === 'play' || game.state === 'between')) pressed.add('Draw');
   const held = Object.keys(ACT_DIRS).find(k => keys[k]);
   if (held) { pressed.add(ACT_DIRS[held]); actUsed = true; }
+  // mid-chain a click is plainly the next strike: take it the moment the button goes down, not on release, so the
+  // timing is the press the player made (otherwise a slightly long click landed late or was lost)
+  else if (P.drawn && ((P.state === 'attack' && !P.failed && P.step < COMBO.length - 1) || P.chainGrace > 0) && !(keys.KeyS || keys.ArrowDown)) { pressed.add('Attack'); actUsed = true; }
 }
 function actionRelease() {
   if (actionHeld()) return;
-  if (!actUsed && performance.now() - actT < 250 && !(keys.KeyS || keys.ArrowDown)) pressed.add('Attack');
+  if (!actUsed && performance.now() - actT < 350 && !(keys.KeyS || keys.ArrowDown)) pressed.add('Attack');
 }
 // Ctrl draws the sword, and browsers never let a page block Ctrl+W: ask before the tab closes mid-fight
 addEventListener('beforeunload', e => { if (game.state === 'play' || game.state === 'between') { e.preventDefault(); e.returnValue = ''; } });
@@ -3627,8 +3637,9 @@ addEventListener('keyup', e => {
   if (e.code === 'Space' && !spaceStrafed && !lockTarget && P.state !== 'down' && performance.now() - spaceT < 350) pressed.add('Space'); // a tap: jump
 });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouseR = false; mouseL = false; });
-renderer.domElement.addEventListener('mousedown', e => {
+addEventListener('mousedown', e => {
   if (game.state === 'title' || paused) return;
+  if (!document.pointerLockElement && e.target.closest?.('button, input, select, a, label, .panel, #touch .tb')) return; // menu and touch buttons
   if (document.pointerLockElement !== renderer.domElement) lockPointer();
   if (e.button === 0) { actionPress(); mouseL = true; }
   if (e.button === 2) mouseR = true;
@@ -3680,6 +3691,14 @@ const touch = { stick: { x: 0, y: 0, active: false }, parry: false, enabled: fal
   addEventListener('resize', orient);
   if (TOUCH) enable();
   addEventListener('touchstart', enable, { passive: true, capture: true });
+  // …and back off the moment a real mouse is used (a touchscreen laptop, or a tap on a desktop screen), so the touch
+  // layer never sits over the game eating mouse clicks. Taps fire pointer events of type 'touch', so they don't count.
+  function disable() {
+    if (!touch.enabled || TOUCH) return;
+    touch.enabled = false; touch.reset?.(); document.body.classList.remove('touch'); orient();
+  }
+  addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') disable(); }, { capture: true });
+  addEventListener('pointermove', e => { if (e.pointerType === 'mouse' && (Math.abs(e.movementX) + Math.abs(e.movementY) > 2 || document.pointerLockElement)) disable(); }, { capture: true });
   const playing = () => !paused && game.state !== 'title';
   const buzz = ms => { try { navigator.vibrate?.(ms); } catch (e) { /* no haptics */ } };
   // tap vs hold is judged by the touch events' own timestamps, so a slow frame on the phone can't turn a tap into a guard
