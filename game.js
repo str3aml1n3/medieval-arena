@@ -2303,7 +2303,7 @@ const SWINGS = {
   spin: { w: 'spinW', seq: ['spinA', 'spinS'], cuts: [0, 1], once: true, arc: 3.3, dmg: 1.4, lunge: 1.2, aMul: 2.3, wMul: 1.15, spin: true },
   heavy: { w: 'heavyW', seq: ['heavyS'], arc: 0.7, dmg: 1.75, lunge: 2.6, slow: 1.3 },
 };
-const COMBO = ['chop', 'rl', 'lr', 'wave', 'spin', 'heavy'];
+const COMBO = ['chop', 'rl', 'lr', 'spin', 'wave', 'heavy'];
 const easeIn = t => t * t, easeOut = t => 1 - (1 - t) * (1 - t);
 
 const hero = buildHero();
